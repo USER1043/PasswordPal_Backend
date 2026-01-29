@@ -1,12 +1,15 @@
-import express from "express";
+import app from './app.js';
+import { testConnection } from './config/db.js';
 
-const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 
-app.get("/", (_, res) => {
-  res.send("Hello, the server is alive!!");
-});
+(async () => {
+  const result = await testConnection();
+  if (!result.ok) {
+    console.error('Warning: DB connectivity test failed on startup.');
+  }
 
-app.listen(PORT, () => {
-  console.log(`Server started at http://localhost:${PORT}/`);
-});
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+})();
