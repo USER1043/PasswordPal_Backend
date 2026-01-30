@@ -44,6 +44,52 @@ export async function getUserById(id) {
   return data;
 }
 
+// Task 5.2.3: Store TOTP secret encrypted
+export async function updateUserTotpSecret(userId, encryptedSecret) {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      totp_secret: encryptedSecret,
+      totp_enabled: true,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', userId)
+    .select()
+    .single();
+  
+  if (error) throw error;
+  return data;
+}
+
+// Retrieve TOTP secret for a user
+export async function getUserTotpSecret(userId) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('totp_secret, totp_enabled')
+    .eq('id', userId)
+    .single();
+  
+  if (error) throw error;
+  return data;
+}
+
+// Disable TOTP for a user
+export async function disableUserTotp(userId) {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      totp_secret: null,
+      totp_enabled: false,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', userId)
+    .select()
+    .single();
+  
+  if (error) throw error;
+  return data;
+}
+
 // Validate JWT secret is configured
 if (!process.env.JWT_SECRET) {
   console.error("ERROR: JWT_SECRET is missing in .env");
