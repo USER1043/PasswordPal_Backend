@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Backup Codes Demo</title>
+</head>
+<body>
+  <h3>PasswordPal MFA Backup Codes Demo</h3>
+  <p>Paste a JWT token for `sb-access-token` below, then press <strong>Set Token</strong>.</p>
+  <textarea id="token" rows="3" cols="80" placeholder="Paste JWT here"></textarea><br>
+  <button id="setToken">Set Token</button>
+  <hr>
+  <div style="border:2px solid #c00;padding:12px;background:#fff6f6;">
+    <strong>Important — Store Backup Codes Securely</strong>
+    <p style="margin:6px 0 0 0;">These backup codes are single-use and provide full account access. Print them or store them in a trusted password manager. Do not share them or store them in insecure locations.</p>
+    <label style="display:block;margin-top:8px;"><input type="checkbox" id="ack"> I understand the risks and will store these codes securely.</label>
+  </div>
+  <div style="margin-top:12px;">
+    <button id="generate" disabled>Generate & Show Codes</button>
+    <button id="download" disabled>Generate & Download File</button>
+  </div>
+  <pre id="output" style="white-space:pre-wrap;border:1px solid #ccc;padding:8px;margin-top:12px;"></pre>
+
+  <script>
+    document.getElementById('setToken').addEventListener('click', () => {
+      const t = document.getElementById('token').value.trim();
+      if (!t) return alert('Paste a JWT token first');
+      // Set cookie for this demo (host must match where server runs)
+      document.cookie = `sb-access-token=${t}; path=/`;
+      alert('Cookie set: sb-access-token');
+    });
+
+    async function callGenerate(download) {
+      const url = '/auth/totp/backup-codes/generate' + (download ? '?download=1' : '');
+      try {
+        const opts = { method: 'POST', credentials: 'include' };
+        const res = await fetch(url, opts);
+        if (download) {
+          // The browser will handle the download if header present; fetch response text as fallback
+          if (res.ok && res.headers.get('content-disposition')) {
+            const blob = await res.blob();
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'passwordpal_backup_codes.txt';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            document.getElementById('output').textContent = 'Download initiated.';
+            return;
+          }
+        }
+
+        const data = await res.json();
+        if (!data.success) {
+          document.getElementById('output').textContent = 'Error: ' + (data.error || JSON.stringify(data));
+          return;
+        }
+        document.getElementById('output').textContent = data.codes.join('\n');
+      } catch (err) {
+        document.getElementById('output').textContent = 'Request failed: ' + err.message;
+      }
+    }
+
+    document.getElementById('generate').addEventListener('click', () => callGenerate(false));
+    document.getElementById('download').addEventListener('click', () => callGenerate(true));
+  </script>
+</body>
+</html>

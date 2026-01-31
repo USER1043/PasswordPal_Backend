@@ -289,3 +289,21 @@ router.post('/backup-codes/redeem', async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Dev-only: generate backup codes without auth/DB for quick local testing
+if (process.env.NODE_ENV !== 'production') {
+  router.post('/dev/backup-codes/generate', async (req, res) => {
+    try {
+      const codes = generateBackupCodes(10, 10);
+      if (req.query && req.query.download === '1') {
+        res.setHeader('Content-Disposition', 'attachment; filename="passwordpal_backup_codes.txt"');
+        res.type('text/plain');
+        return res.status(200).send(codes.join('\n'));
+      }
+      return res.status(200).json({ success: true, codes, message: 'Dev: backup codes generated (no DB/auth).' });
+    } catch (err) {
+      console.error('Dev generate backup codes error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+}
