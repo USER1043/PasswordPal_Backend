@@ -154,4 +154,72 @@ router.post('/logout', async (req, res) => {
   return res.status(200).json({ message: 'Logged out successfully' });
 });
 
+
+// Verify Password - Re-authenticate for sensitive actions
+router.post('/verify-password', async (req, res) => {
+  try {
+    // We expect the user to have a valid (but possibly stale) session to call this,
+    // OR they are calling it as a public endpoint. 
+    // Usually re-auth implies we know who they claim to be.
+    // However, the `sb-access-token` might be missing if we are strict, but here we cover the "stale but present" case.
+    // Let's rely on the cookie for identity, but not for freshness.
+    const token = req.cookies['sb-access-token'];
+
+    // If no token, they aren't even logged in mostly, but let's allow re-login if we want.
+    // But for "Password Confirm", we want to confirm the CURRENT user.
+    if (!token) {
+      return res.status(401).json({ error: 'No session active.' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ error: 'Invalid session.' });
+    }
+
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: 'Password required' });
+    }
+
+    // Get user
+    let user;
+    try {
+      // We use the ID from the token to fetch the user
+      // We probably need `getUserById` but we only have `getUserByEmail` imported.
+      // Let's use `getUserByEmail` since the token has email.
+      user = await getUserByEmail(decoded.email);
+    } catch (err) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify password
+    const passwordMatch = await bcrypt.compare(password, user.auth_key_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+
+    // Issue NEW Fresh JWT
+    const accessToken = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
+      expiresIn: '15m',
+      // iat will be updated to NOW automatically
+    });
+
+    res.cookie('sb-access-token', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000,
+    });
+
+    return res.status(200).json({ message: 'Re-authentication successful', fresh: true });
+
+  } catch (err) {
+    console.error('Re-auth error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
+
