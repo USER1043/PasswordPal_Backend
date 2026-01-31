@@ -2,8 +2,9 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
-import { updateUserTotpSecret, getUserTotpSecret, disableUserTotp } from '../config/db.js';
+import { updateUserTotpSecret, getUserTotpSecret, disableUserTotp, updateUserBackupCodes, consumeUserBackupCode } from '../config/db.js';
 import { encryptData, decryptData } from '../utils/encryption.js';
+import { generateBackupCodes, hashBackupCodes } from '../utils/mfa.js';
 
 const router = express.Router();
 
@@ -223,3 +224,68 @@ router.post('/disable', async (req, res) => {
 });
 
 export default router;
+
+// POST /backup-codes/generate - generate and store hashed backup codes, return plaintext codes once
+router.post('/backup-codes/generate', async (req, res) => {
+  try {
+    const token = req.cookies['sb-access-token'];
+    if (!token) return res.status(401).json({ error: 'Unauthorized - no access token' });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
+
+    // Generate codes and hash them
+    const codes = generateBackupCodes(10, 10);
+    const hashed = hashBackupCodes(codes);
+
+    // Store hashed codes server-side
+    try {
+      await updateUserBackupCodes(userId, hashed);
+    } catch (dbErr) {
+      console.error('DB error storing backup codes:', dbErr);
+      return res.status(500).json({ error: 'Failed to store backup codes. Please try again.' });
+    }
+
+    // Return plaintext codes to user exactly once
+    // If `?download=1` is provided, return a plaintext file attachment for download
+    if (req.query && req.query.download === '1') {
+      res.setHeader('Content-Disposition', 'attachment; filename="passwordpal_backup_codes.txt"');
+      res.type('text/plain');
+      return res.status(200).send(codes.join('\n'));
+    }
+
+    return res.status(200).json({ success: true, codes, message: 'Backup codes generated. Save them now; they are shown only once.' });
+  } catch (err) {
+    console.error('Generate backup codes error:', err);
+    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid or expired token' });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /backup-codes/redeem - accept a single code, consume it if valid
+router.post('/backup-codes/redeem', async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: 'Code is required' });
+
+    const token = req.cookies['sb-access-token'];
+    if (!token) return res.status(401).json({ error: 'Unauthorized - no access token' });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
+
+    try {
+      const result = await consumeUserBackupCode(userId, code);
+      if (!result.consumed) return res.status(401).json({ error: 'Invalid or already used backup code' });
+
+      return res.status(200).json({ success: true, message: 'Backup code accepted and consumed' });
+    } catch (dbErr) {
+      console.error('DB error consuming backup code:', dbErr);
+      return res.status(500).json({ error: 'Failed to verify backup code. Please try again.' });
+    }
+  } catch (err) {
+    console.error('Redeem backup code error:', err);
+    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid or expired token' });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});

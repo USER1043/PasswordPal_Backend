@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import bcrypt from 'bcryptjs';
 
 // Export a shared Supabase client configured from environment variables.
 // Use the service role key in server-side code if you need elevated privileges.
@@ -49,14 +50,14 @@ export async function updateUserTotpSecret(userId, encryptedSecret) {
   const { data, error } = await supabase
     .from('users')
     .update({
-      totp_secret: encryptedSecret,
-      totp_enabled: true,
+      mfa_totp_secret: encryptedSecret,
+      mfa_enabled: true,
       updated_at: new Date().toISOString()
     })
     .eq('id', userId)
     .select()
     .single();
-  
+
   if (error) throw error;
   return data;
 }
@@ -65,10 +66,10 @@ export async function updateUserTotpSecret(userId, encryptedSecret) {
 export async function getUserTotpSecret(userId) {
   const { data, error } = await supabase
     .from('users')
-    .select('totp_secret, totp_enabled')
+    .select('mfa_totp_secret as totp_secret, mfa_enabled as totp_enabled')
     .eq('id', userId)
     .single();
-  
+
   if (error) throw error;
   return data;
 }
@@ -78,14 +79,14 @@ export async function disableUserTotp(userId) {
   const { data, error } = await supabase
     .from('users')
     .update({
-      totp_secret: null,
-      totp_enabled: false,
+      mfa_totp_secret: null,
+      mfa_enabled: false,
       updated_at: new Date().toISOString()
     })
     .eq('id', userId)
     .select()
     .single();
-  
+
   if (error) throw error;
   return data;
 }
@@ -94,4 +95,67 @@ export async function disableUserTotp(userId) {
 if (!process.env.JWT_SECRET) {
   console.error("ERROR: JWT_SECRET is missing in .env");
   process.exit(1);
+}
+
+// Backup codes helpers
+export async function updateUserBackupCodes(userId, hashedCodes) {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      mfa_backup_codes: JSON.stringify(hashedCodes),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getUserBackupCodes(userId) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('mfa_backup_codes')
+    .eq('id', userId)
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function consumeUserBackupCode(userId, plainCode) {
+  // Retrieve current hashed codes (stored as JSON text)
+  const codesRow = await getUserBackupCodes(userId);
+  let hashedCodes = [];
+  if (codesRow && codesRow.mfa_backup_codes) {
+    try {
+      hashedCodes = JSON.parse(codesRow.mfa_backup_codes);
+    } catch (e) {
+      hashedCodes = [];
+    }
+  }
+
+  // Find matching hash
+  let matchedIndex = -1;
+  for (let i = 0; i < hashedCodes.length; i++) {
+    const match = await bcrypt.compare(plainCode, hashedCodes[i]);
+    if (match) {
+      matchedIndex = i;
+      break;
+    }
+  }
+
+  if (matchedIndex === -1) {
+    return { consumed: false };
+  }
+
+  // Remove the used code
+  const newHashes = hashedCodes.slice();
+  newHashes.splice(matchedIndex, 1);
+
+  // Update DB
+  await updateUserBackupCodes(userId, newHashes);
+
+  return { consumed: true };
 }
