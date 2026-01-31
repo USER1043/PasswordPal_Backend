@@ -63,6 +63,17 @@
 
     document.getElementById('generate').addEventListener('click', () => callGenerate(false));
     document.getElementById('download').addEventListener('click', () => callGenerate(true));
+    
+    // Task 5.3.3: Enable buttons only when warning is acknowledged
+    const ackCheckbox = document.getElementById('ack');
+    const genBtn = document.getElementById('generate');
+    const dlBtn = document.getElementById('download');
+
+    ackCheckbox.addEventListener('change', (e) => {
+      const enabled = e.target.checked;
+      genBtn.disabled = !enabled;
+      dlBtn.disabled = !enabled;
+    });
   </script>
 </body>
 </html>
