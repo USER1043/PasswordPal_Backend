@@ -178,6 +178,27 @@ router.post('/verify-login', async (req, res) => {
       }
 
       // TOTP code verified successfully
+      
+      // Task 5.4.2: Issue long-lived MFA token if user requested to trust this device
+      const { trust_device } = req.body;
+      if (trust_device) {
+        // Generate a simple high-entropy token for the cookie
+        // In a real app, store this hash in DB to allow revocation. 
+        // For this story, we'll use a signed JWT acts as the "device token"
+        const deviceToken = jwt.sign({ 
+           id: userId, 
+           type: 'trusted-device',
+           issuedAt: Date.now() 
+        }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+        res.cookie('sb-trusted-device', deviceToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+        });
+      }
+
       return res.status(200).json({
         success: true,
         message: 'TOTP verification successful. Login complete.',
