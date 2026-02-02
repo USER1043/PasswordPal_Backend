@@ -1,7 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { getUserByEmail } from '../config/db.js';
+import { getUserByEmail, incrementFailedLogin, resetFailedLogin } from '../config/db.js';
 
 const router = express.Router();
 
@@ -21,11 +21,27 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    // Check for lockout
+    if (user.lockout_until) {
+      const lockoutTime = new Date(user.lockout_until);
+      if (lockoutTime > new Date()) {
+        const remainingMinutes = Math.ceil((lockoutTime - new Date()) / 60000);
+        return res.status(429).json({
+          error: `Too many attempts. Try again later. (${remainingMinutes}m)`
+        });
+      }
+    }
+
     // Verify password against auth_key_hash
     const passwordMatch = await bcrypt.compare(password, user.auth_key_hash);
     if (!passwordMatch) {
+      // Task 5.7.1: Track failed login attempts
+      await incrementFailedLogin(email);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+
+    // Login successful - Reset failed attempts
+    await resetFailedLogin(email);
 
     // Generate JWT tokens
     const accessToken = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
@@ -102,7 +118,7 @@ router.post('/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
 
