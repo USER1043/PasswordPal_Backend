@@ -8,7 +8,9 @@ import { generateBackupCodes, hashBackupCodes } from '../utils/mfa.js';
 
 const router = express.Router();
 
-// Task 5.2.1: Generate TOTP secret and encode in QR code
+// Task 5.2.1: Setup TOTP
+// Generates a new TOTP secret and returns a QR code for the user to scan.
+// The secret is NOT saved yet; it must be verified first.
 router.post('/setup', async (req, res) => {
   try {
     // Get user ID from JWT token
@@ -48,11 +50,13 @@ router.post('/setup', async (req, res) => {
   }
 });
 
-// Task 5.2.2: Validate 6-digit code entered by user to confirm setup
+// Task 5.2.2: Verify Setup
+// Validates the 6-digit code from the app to confirm the user scanned the QR correctly.
+// If valid, encrypts and saves the secret to the DB, enabling MFA.
 router.post('/verify-setup', async (req, res) => {
   try {
     const { secret, code } = req.body;
-    
+
     if (!secret || !code) {
       return res.status(400).json({ error: 'Secret and code are required' });
     }
@@ -106,7 +110,8 @@ router.post('/verify-setup', async (req, res) => {
   }
 });
 
-// Get TOTP status (check if enabled)
+// Get MFA Status
+// Checks if the current user has TOTP enabled.
 router.get('/status', async (req, res) => {
   try {
     const token = req.cookies['sb-access-token'];
@@ -132,11 +137,14 @@ router.get('/status', async (req, res) => {
   }
 });
 
-// Verify TOTP code during login (for users with TOTP enabled)
+// Verify Login with TOTP
+// Second step of login for MFA-enabled users.
+// Verifies the 6-digit code and completes the authentication process.
+// Can also set a "trusted device" cookie if requested.
 router.post('/verify-login', async (req, res) => {
   try {
     const { code } = req.body;
-    
+
     if (!code) {
       return res.status(400).json({ error: 'Code is required' });
     }
@@ -156,7 +164,7 @@ router.post('/verify-login', async (req, res) => {
 
     // Get user's TOTP secret
     const userTotp = await getUserTotpSecret(userId);
-    
+
     if (!userTotp.totp_enabled || !userTotp.totp_secret) {
       return res.status(400).json({ error: 'TOTP is not enabled for this user' });
     }
@@ -178,17 +186,17 @@ router.post('/verify-login', async (req, res) => {
       }
 
       // TOTP code verified successfully
-      
+
       // Task 5.4.2: Issue long-lived MFA token if user requested to trust this device
       const { trust_device } = req.body;
       if (trust_device) {
         // Generate a simple high-entropy token for the cookie
         // In a real app, store this hash in DB to allow revocation. 
         // For this story, we'll use a signed JWT acts as the "device token"
-        const deviceToken = jwt.sign({ 
-           id: userId, 
-           type: 'trusted-device',
-           issuedAt: Date.now() 
+        const deviceToken = jwt.sign({
+          id: userId,
+          type: 'trusted-device',
+          issuedAt: Date.now()
         }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
         res.cookie('sb-trusted-device', deviceToken, {
@@ -217,7 +225,8 @@ router.post('/verify-login', async (req, res) => {
   }
 });
 
-// Disable TOTP for user
+// Disable TOTP
+// Turns off MFA for the user.
 router.post('/disable', async (req, res) => {
   try {
     const token = req.cookies['sb-access-token'];
@@ -246,7 +255,9 @@ router.post('/disable', async (req, res) => {
 
 export default router;
 
-// POST /backup-codes/generate - generate and store hashed backup codes, return plaintext codes once
+// Generate Backup Codes
+// Creates 10 new random codes, hashes them, and stores them in DB.
+// Returns the plaintext codes ONCE for the user to save.
 router.post('/backup-codes/generate', async (req, res) => {
   try {
     const token = req.cookies['sb-access-token'];
@@ -283,7 +294,9 @@ router.post('/backup-codes/generate', async (req, res) => {
   }
 });
 
-// POST /backup-codes/redeem - accept a single code, consume it if valid
+// Redeem Backup Code
+// Validates a single backup code during login (instead of TOTP).
+// If valid, the code is consumed (deleted) so it cannot be used again.
 router.post('/backup-codes/redeem', async (req, res) => {
   try {
     const { code } = req.body;

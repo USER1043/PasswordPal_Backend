@@ -4,9 +4,11 @@ import CryptoJS from 'crypto-js';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-secret-key-change-in-production';
 
 /**
- * Encrypt sensitive data (TOTP secret)
- * @param {string} data - Data to encrypt
- * @returns {string} - Encrypted data
+ * Encrypt sensitive data (like TOTP secrets) before storing in the database.
+ * Uses AES encryption via crypto-js.
+ * 
+ * @param {string} data - Plaintext data to encrypt.
+ * @returns {string} - AES encrypted string.
  */
 export const encryptData = (data) => {
   try {
@@ -18,9 +20,10 @@ export const encryptData = (data) => {
 };
 
 /**
- * Decrypt sensitive data (TOTP secret)
- * @param {string} encryptedData - Encrypted data to decrypt
- * @returns {string} - Decrypted data
+ * Decrypt sensitive data (like TOTP secrets) retrieved from the database.
+ * 
+ * @param {string} encryptedData - The encrypted string to decrypt.
+ * @returns {string} - The original plaintext data.
  */
 export const decryptData = (encryptedData) => {
   try {

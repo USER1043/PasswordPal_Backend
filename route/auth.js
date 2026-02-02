@@ -5,7 +5,8 @@ import { getUserByEmail, incrementFailedLogin, resetFailedLogin } from '../confi
 
 const router = express.Router();
 
-// Login - verify email and password against users table
+// Login Endpoint
+// Verifies email and password, checks for account lockout, and issues JWT tokens.
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -122,7 +123,9 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Refresh - rotate JWT tokens
+// Refresh Token Endpoint
+// Rotates JWT tokens to keep the session active without re-login.
+// Uses the long-lived refresh token to issue a new access token.
 router.post('/refresh', async (req, res) => {
   try {
     const refreshToken = req.cookies['sb-refresh-token'];
@@ -163,7 +166,8 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// Logout
+// Logout Endpoint
+// Clears auth cookies to end the session.
 router.post('/logout', async (req, res) => {
   res.clearCookie('sb-access-token');
   res.clearCookie('sb-refresh-token');
@@ -171,7 +175,9 @@ router.post('/logout', async (req, res) => {
 });
 
 
-// Verify Password - Re-authenticate for sensitive actions
+// Password Verification Endpoint
+// Used for "Step-up Authentication" (Re-auth) before sensitive actions.
+// Verifies password again and issues a "fresh" access token.
 router.post('/verify-password', async (req, res) => {
   try {
     // We expect the user to have a valid (but possibly stale) session to call this,

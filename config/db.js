@@ -2,14 +2,18 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 
+// --- Supabase Client Initialization ---
 // Export a shared Supabase client configured from environment variables.
-// Use the service role key in server-side code if you need elevated privileges.
+// This client is used throughout the application to interact with the database.
 export const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SECRET_KEY
 );
 
-// Helper to test connectivity (not executed on import)
+/**
+ * Validates connection to Supabase by running a simple query.
+ * Used during server startup to fail fast if DB is unreachable.
+ */
 export async function testConnection() {
   try {
     const { data, error } = await supabase.from('users').select().limit(1);
@@ -22,7 +26,12 @@ export async function testConnection() {
   }
 }
 
-// User query helpers
+// --- User Data Access Helpers ---
+
+/**
+ * Retrieve a user record by their email address.
+ * @param {string} email - The email to search for.
+ */
 export async function getUserByEmail(email) {
   const { data, error } = await supabase
     .from('users')
@@ -34,6 +43,10 @@ export async function getUserByEmail(email) {
   return data;
 }
 
+/**
+ * Retrieve a user record by their unique ID.
+ * @param {string} id - The user ID (UUID).
+ */
 export async function getUserById(id) {
   const { data, error } = await supabase
     .from('users')
@@ -45,7 +58,13 @@ export async function getUserById(id) {
   return data;
 }
 
-// Task 5.2.3: Store TOTP secret encrypted
+// --- TOTP / MFA Helpers ---
+
+/**
+ * Stores the encrypted TOTP secret for a user and enables MFA.
+ * @param {string} userId - The user's ID.
+ * @param {string} encryptedSecret - The encrypted TOTP secret string.
+ */
 export async function updateUserTotpSecret(userId, encryptedSecret) {
   const { data, error } = await supabase
     .from('users')
@@ -62,7 +81,10 @@ export async function updateUserTotpSecret(userId, encryptedSecret) {
   return data;
 }
 
-// Retrieve TOTP secret for a user
+/**
+ * Retrieves the TOTP secret and enabled status for a user.
+ * @param {string} userId - The user's ID.
+ */
 export async function getUserTotpSecret(userId) {
   const { data, error } = await supabase
     .from('users')
@@ -74,7 +96,10 @@ export async function getUserTotpSecret(userId) {
   return data;
 }
 
-// Disable TOTP for a user
+/**
+ * Disables TOTP for a user by clearing the secret and flag.
+ * @param {string} userId - The user's ID.
+ */
 export async function disableUserTotp(userId) {
   const { data, error } = await supabase
     .from('users')
@@ -91,13 +116,19 @@ export async function disableUserTotp(userId) {
   return data;
 }
 
-// Validate JWT secret is configured
+// Verify that critical environment variables are present
 if (!process.env.JWT_SECRET) {
   console.error("ERROR: JWT_SECRET is missing in .env");
   process.exit(1);
 }
 
-// Backup codes helpers
+// --- Backup Codes Helpers ---
+
+/**
+ * Stores hashed backup codes for a user.
+ * @param {string} userId - The user's ID.
+ * @param {Array<string>} hashedCodes - Array of bcrypt-hashed codes.
+ */
 export async function updateUserBackupCodes(userId, hashedCodes) {
   const { data, error } = await supabase
     .from('users')
@@ -113,6 +144,10 @@ export async function updateUserBackupCodes(userId, hashedCodes) {
   return data;
 }
 
+/**
+ * Retrieves raw stored backup codes (hashed) for a user.
+ * @param {string} userId - The user's ID.
+ */
 export async function getUserBackupCodes(userId) {
   const { data, error } = await supabase
     .from('users')
@@ -124,8 +159,17 @@ export async function getUserBackupCodes(userId) {
   return data;
 }
 
+/**
+ * Verifies and consumes a single use backup code.
+ * Checks the provided plainCode against all stored hashes.
+ * If a match is found, the code is removed from the DB to prevent reuse.
+ * 
+ * @param {string} userId - The user's ID.
+ * @param {string} plainCode - The plaintext 6-digit backup code.
+ * @returns {Promise<{consumed: boolean}>} - Result indicating if code was valid and consumed.
+ */
 export async function consumeUserBackupCode(userId, plainCode) {
-  // Retrieve current hashed codes (stored as JSON text)
+  // 1. Retrieve current hashed codes
   const codesRow = await getUserBackupCodes(userId);
   let hashedCodes = [];
   if (codesRow && codesRow.mfa_backup_codes) {
@@ -136,7 +180,7 @@ export async function consumeUserBackupCode(userId, plainCode) {
     }
   }
 
-  // Find matching hash
+  // 2. Find matching hash (brute-force check against list)
   let matchedIndex = -1;
   for (let i = 0; i < hashedCodes.length; i++) {
     const match = await bcrypt.compare(plainCode, hashedCodes[i]);
@@ -150,22 +194,27 @@ export async function consumeUserBackupCode(userId, plainCode) {
     return { consumed: false };
   }
 
-  // Remove the used code
+  // 3. Remove the used code (One-Time Use)
   const newHashes = hashedCodes.slice();
   newHashes.splice(matchedIndex, 1);
 
-  // Update DB
+  // 4. Update DB with remaining codes
   await updateUserBackupCodes(userId, newHashes);
 
   return { consumed: true };
 }
 
-// Account Locking Helpers (Story 5.7)
+// --- Account Locking Helpers ---
 
+/**
+ * Increments the failed login counter for a user.
+ * If threshold (5) is reached, sets a lockout timestamp.
+ * @param {string} email - The user's email.
+ */
 export async function incrementFailedLogin(email) {
   // First, get current attempts
   const user = await getUserByEmail(email);
-  if (!user) return null; // User doesn't exist, generic error handled in auth.js
+  if (!user) return null; // User doesn't exist
 
   let newAttempts = (user.failed_login_attempts || 0) + 1;
   let updates = {
@@ -191,6 +240,11 @@ export async function incrementFailedLogin(email) {
   return data;
 }
 
+/**
+ * Resets failed login attempts and clears lockout.
+ * Call this after a successful login.
+ * @param {string} email - The user's email.
+ */
 export async function resetFailedLogin(email) {
   const { data, error } = await supabase
     .from('users')
@@ -198,7 +252,7 @@ export async function resetFailedLogin(email) {
       failed_login_attempts: 0,
       lockout_until: null
     })
-    .eq('email', email) // Using email is easier as we have it in login flow
+    .eq('email', email)
     .select()
     .single();
 
