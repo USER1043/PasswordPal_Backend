@@ -6,7 +6,8 @@ import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
 
 // Mock dependencies
-vi.mock('../config/db.js', () => ({
+// Mock dependencies
+vi.mock('../models/mfaModel.js', () => ({
     updateUserTotpSecret: vi.fn(),
     getUserTotpSecret: vi.fn(),
     disableUserTotp: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('../utils/mfa.js', () => ({
     hashBackupCodes: (codes) => codes.map(c => `hash_${c}`)
 }));
 
-import * as db from '../config/db.js';
+import * as db from '../models/mfaModel.js';
 import totpRouter from '../route/totp.js';
 
 const app = express();

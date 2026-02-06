@@ -23,6 +23,13 @@ app.use(cookieParser());
 app.use('/api', apiRouter);
 
 describe('API Routes', () => {
+    // Mock vault model
+    vi.mock('../models/vaultModel.js', () => ({
+        getVaultItemsByUserId: vi.fn().mockResolvedValue([
+            { id: 1, label: 'Test Item', encrypted_data: 'encrypted-stuff' }
+        ])
+    }));
+
     describe('GET /api/vault-data', () => {
         it('should return vault data for authenticated user', async () => {
             const res = await request(app)
@@ -30,8 +37,9 @@ describe('API Routes', () => {
                 .set('Cookie', ['sb-access-token=valid-token']);
 
             expect(res.status).toBe(200);
-            expect(res.body.message).toContain('secret data');
-            expect(res.body.user).toBeDefined();
+            expect(res.body.message).toContain('data retrieved successfully');
+            expect(res.body.items).toHaveLength(1);
+            expect(res.body.items[0].label).toBe('Test Item');
         });
 
         it('should return 401 for unauthenticated user', async () => {
