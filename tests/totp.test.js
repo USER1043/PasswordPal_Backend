@@ -7,6 +7,8 @@ import speakeasy from 'speakeasy';
 
 // Mock dependencies
 // Mock dependencies
+// Mock dependencies
+// Mock database functions to avoid touching the real DB
 vi.mock('../models/mfaModel.js', () => ({
     updateUserTotpSecret: vi.fn(),
     getUserTotpSecret: vi.fn(),
@@ -47,14 +49,16 @@ describe('TOTP Routes', () => {
 
     describe('POST /totp/setup', () => {
         it('should return QR code and secret', async () => {
+            // Action: Request to start TOTP setup
             const res = await request(app)
                 .post('/totp/setup')
                 .set('Cookie', [`sb-access-token=${validToken}`]);
 
+            // Assertions: Should return data needed for QR code generation
             expect(res.status).toBe(200);
             expect(res.body.success).toBe(true);
-            expect(res.body.qrCode).toBeDefined();
-            expect(res.body.secret).toBeDefined();
+            expect(res.body.qrCode).toBeDefined(); // The data URL for the QR image
+            expect(res.body.secret).toBeDefined(); // The text version of the secret
         });
 
         it('should return 401 if unauthorized', async () => {
@@ -65,6 +69,7 @@ describe('TOTP Routes', () => {
 
     describe('POST /totp/verify-setup', () => {
         it('should verify correct code and store secret', async () => {
+            // Setup: Generate a valid TOTP code for our mock secret
             const validCode = speakeasy.totp({
                 secret: secret.base32,
                 encoding: 'base32'
@@ -72,22 +77,26 @@ describe('TOTP Routes', () => {
 
             db.updateUserTotpSecret.mockResolvedValue(true);
 
+            // Action: Send the code to verify and enable MFA
             const res = await request(app)
                 .post('/totp/verify-setup')
                 .set('Cookie', [`sb-access-token=${validToken}`])
                 .send({ secret: secret.base32, code: validCode });
 
+            // Assertions: Should succeed and update the DB
             expect(res.status).toBe(200);
             expect(res.body.success).toBe(true);
             expect(db.updateUserTotpSecret).toHaveBeenCalledWith('123', `encrypted_${secret.base32}`);
         });
 
         it('should reject invalid code', async () => {
+            // Action: Send an obviously wrong code
             const res = await request(app)
                 .post('/totp/verify-setup')
                 .set('Cookie', [`sb-access-token=${validToken}`])
                 .send({ secret: secret.base32, code: '000000' });
 
+            // Assertions: Should fail
             expect(res.status).toBe(401);
         });
     });
@@ -131,10 +140,12 @@ describe('TOTP Routes', () => {
         it('should disable totp', async () => {
             db.disableUserTotp.mockResolvedValue(true);
 
+            // Action: Request to turn off MFA
             const res = await request(app)
                 .post('/totp/disable')
                 .set('Cookie', [`sb-access-token=${validToken}`]);
 
+            // Assertions: Should call the DB function to remove the secret
             expect(res.status).toBe(200);
             expect(db.disableUserTotp).toHaveBeenCalledWith('123');
         });
@@ -156,13 +167,16 @@ describe('TOTP Routes', () => {
 
     describe('POST /totp/backup-codes/redeem', () => {
         it('should redeem valid backup code', async () => {
+            // Setup: Mock DB saying the code was valid and consumed
             db.consumeUserBackupCode.mockResolvedValue({ consumed: true });
 
+            // Action: Submit a backup code instead of TOTP
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')
                 .set('Cookie', [`sb-access-token=${validToken}`])
                 .send({ code: 'valid-code' });
 
+            // Assertions: Should succeed
             expect(res.status).toBe(200);
             expect(db.consumeUserBackupCode).toHaveBeenCalledWith('123', 'valid-code');
         });
