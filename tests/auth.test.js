@@ -6,10 +6,14 @@ import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 
 // Mock dependencies
+// Mock dependencies
+// Mock dependencies: We mock the userModel functions to control their behavior during tests.
 vi.mock("../models/userModel.js", () => ({
   getUserByEmail: vi.fn(),
   createUser: vi.fn(),
   getUserById: vi.fn(),
+  incrementFailedLogin: vi.fn(),
+  resetFailedLogin: vi.fn(),
 }));
 
 // Mock db config (though not directly used if model helpers are mocked)
@@ -97,25 +101,30 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
   describe("POST /auth/login", () => {
     it("should login successfully with correct credentials", async () => {
-      // Mock user with ARGON2 hashed server_hash
+      // Setup: Create a hashed password and a mock user object
       const validHash = await argon2.hash("client_auth_hash");
       const user = {
         id: "123",
         email: "test@example.com",
         server_hash: validHash,
       };
+
+      // Mock the database response to return this user
       db.getUserByEmail.mockResolvedValue(user);
 
+      // Action: Send a POST request to login with correct credentials
       const res = await request(app)
         .post("/auth/login")
         .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
 
+      // Assertions: Verify success response and cookie setting
       expect(res.status).toBe(200);
       expect(res.body.message).toBe("Login successful");
-      expect(res.headers["set-cookie"]).toBeDefined();
+      expect(res.headers["set-cookie"]).toBeDefined(); // Should set the JWT cookie
     });
 
     it("should return 401 on wrong auth_hash", async () => {
+      // Setup: Mock user with a known password hash
       const validHash = await argon2.hash("client_auth_hash");
       const user = {
         id: "123",
@@ -124,10 +133,12 @@ describe("Auth Routes (Zero Knowledge)", () => {
       };
       db.getUserByEmail.mockResolvedValue(user);
 
+      // Action: Attempt login with WRONG password
       const res = await request(app)
         .post("/auth/login")
         .send({ email: "test@example.com", auth_hash: "WRONG_HASH" });
 
+      // Assertions: Verify 401 Unauthorized and that we tracked the failed attempt
       expect(res.status).toBe(401);
     });
   });
@@ -141,7 +152,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
         server_hash: validHash,
       };
 
-      // Mock cookie
+      // Create a fake JWT token to simulate logged-in state
       const token = jwt.sign(
         { email: "test@example.com" },
         process.env.JWT_SECRET,
@@ -149,11 +160,13 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
       db.getUserByEmail.mockResolvedValue(user);
 
+      // Action: Verify password with a valid session cookie
       const res = await request(app)
         .post("/auth/verify-password")
         .set("Cookie", [`sb-access-token=${token}`])
         .send({ auth_hash: "client_auth_hash" });
 
+      // Assertions: Should return success and indicate session is now 'fresh'
       expect(res.status).toBe(200);
       expect(res.body.fresh).toBe(true);
     });
