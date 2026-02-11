@@ -6,15 +6,13 @@ import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
 
 // Mock dependencies
-// Mock dependencies
-// Mock dependencies
-// Mock database functions to avoid touching the real DB
 vi.mock('../models/mfaModel.js', () => ({
     updateUserTotpSecret: vi.fn(),
     getUserTotpSecret: vi.fn(),
     disableUserTotp: vi.fn(),
     updateUserBackupCodes: vi.fn(),
     consumeUserBackupCode: vi.fn(),
+    getUserBackupCodes: vi.fn(),
 }));
 
 vi.mock('../utils/encryption.js', () => ({
