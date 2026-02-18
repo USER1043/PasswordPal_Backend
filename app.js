@@ -11,6 +11,8 @@ import authRoutes from './route/auth.js';
 import totpRoutes from './route/totp.js';
 import apiRoutes from './route/api.js';
 import sensitiveRoutes from './route/sensitive.js';
+import vaultRoutes from './route/vaultRoutes.js';
+import breachRoutes from './route/breachRoutes.js';
 
 const app = express();
 
@@ -32,7 +34,12 @@ app.use('/auth/totp', totpRoutes);
 // General API routes (mostly protected)
 app.use('/api', apiRoutes);
 // Sensitive action routes requiring fresh authentication
+// Sensitive action routes requiring fresh authentication
 app.use('/api', sensitiveRoutes);
+// Vault Data routes (Get/Update)
+app.use('/api/vault', vaultRoutes);
+// Breach Check Proxy
+app.use('/api/breach', breachRoutes);
 
 // --- Health Check ---
 // Simple endpoint to verify server is up and running
