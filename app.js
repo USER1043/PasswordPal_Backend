@@ -11,6 +11,7 @@ import authRoutes from './route/auth.js';
 import totpRoutes from './route/totp.js';
 import apiRoutes from './route/api.js';
 import sensitiveRoutes from './route/sensitive.js';
+import vaultSyncRoutes from './route/vaultSync.js';
 
 const app = express();
 
@@ -39,6 +40,8 @@ app.use('/auth/totp', totpRoutes);
 app.use('/api', apiRoutes);
 // Sensitive action routes requiring fresh authentication
 app.use('/api', sensitiveRoutes);
+// Vault sync routes (Delta Sync API)
+app.use('/api/vault', vaultSyncRoutes);
 
 // --- Health Check ---
 // Simple endpoint to verify server is up and running
