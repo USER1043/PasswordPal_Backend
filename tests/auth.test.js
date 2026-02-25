@@ -16,6 +16,12 @@ vi.mock("../models/userModel.js", () => ({
   resetFailedLogin: vi.fn(),
 }));
 
+// Mock login attempt tracking (rate-limiting)
+vi.mock("../models/loginAttemptModel.js", () => ({
+  recordLoginAttempt: vi.fn().mockResolvedValue({}),
+  countRecentFailedAttempts: vi.fn().mockResolvedValue(0),
+}));
+
 // Mock db config (though not directly used if model helpers are mocked)
 vi.mock("../config/db.js", () => ({
   supabase: {},
