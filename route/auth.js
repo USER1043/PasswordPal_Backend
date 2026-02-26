@@ -6,21 +6,37 @@ import {
   getUserByEmail,
   getUserById,
 } from "../models/userModel.js";
+import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
+import { validateRequest } from "../validators/middleware.js";
+import Joi from "joi";
 
 const router = express.Router();
+
+// --- Validation Schemas (request-level) ---
+const registerBodySchema = Joi.object({
+  email: Joi.string().email().required(),
+  salt: Joi.string().required(),
+  wrapped_mek: Joi.string().required(),
+  auth_hash: Joi.string().required(),
+});
+
+const loginBodySchema = Joi.object({
+  email: Joi.string().email().required(),
+  auth_hash: Joi.string().required(),
+});
+
+// Rate limit: max failed attempts per IP within the window
+const MAX_FAILED_ATTEMPTS = 5;
+const RATE_LIMIT_WINDOW_MINUTES = 15;
 
 // --- Zero Knowledge Authentication Endpoints ---
 
 // 1. Register User
 // Accepts email, salt, wrapped_mek, and auth_hash (SHA-256 from client).
 // Hashes auth_hash with Argon2id before storing as server_hash.
-router.post("/register", async (req, res) => {
+router.post("/register", validateRequest(registerBodySchema), async (req, res) => {
   try {
     const { email, salt, wrapped_mek, auth_hash } = req.body;
-
-    if (!email || !salt || !wrapped_mek || !auth_hash) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
 
     // Double Hashing: Hash the client's auth_hash (which acts as a password)
     const server_hash = await argon2.hash(auth_hash);
@@ -53,9 +69,9 @@ router.get("/params", async (req, res) => {
 
     const user = await getUserByEmail(email);
     if (!user) {
-        // Security: To prevent enumeration, maybe return fake/random salt?
-        // For now, returning 404 is acceptable for this stage.
-        return res.status(404).json({ error: "User not found" });
+      // Security: To prevent enumeration, maybe return fake/random salt?
+      // For now, returning 404 is acceptable for this stage.
+      return res.status(404).json({ error: "User not found" });
     }
 
     return res.status(200).json({
@@ -70,11 +86,18 @@ router.get("/params", async (req, res) => {
 
 // 3. Login Step 2: Verify Auth Hash
 // Verifies the auth_hash sent by the client against the stored server_hash.
-router.post("/login", async (req, res) => {
+router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
   try {
     const { email, auth_hash } = req.body;
-    if (!email || !auth_hash) {
-      return res.status(400).json({ error: "Email and auth_hash required" });
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
+    const userAgent = req.headers['user-agent'] || null;
+
+    // --- Rate-limiting check ---
+    const recentFailures = await countRecentFailedAttempts(clientIp, null, RATE_LIMIT_WINDOW_MINUTES);
+    if (recentFailures >= MAX_FAILED_ATTEMPTS) {
+      return res.status(429).json({
+        error: 'Too many failed login attempts. Please try again later.',
+      });
     }
 
     // Get user
@@ -82,16 +105,22 @@ router.post("/login", async (req, res) => {
     try {
       user = await getUserByEmail(email);
     } catch (err) {
+      // Record failed attempt (user not found)
+      await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     // Verify Argon2 hash
-    // verify(hash, plain) -> verify(server_hash, auth_hash)
     const isValid = await argon2.verify(user.server_hash, auth_hash);
-    
+
     if (!isValid) {
+      // Record failed attempt
+      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
       return res.status(401).json({ error: "Invalid credentials" });
     }
+
+    // Record successful attempt
+    await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent }).catch(() => { });
 
     // Login successful - Issue Tokens
     const accessToken = jwt.sign(
@@ -124,9 +153,9 @@ router.post("/login", async (req, res) => {
     const trustedDeviceToken = req.cookies["sb-trusted-device"];
     let isTrustedDevice = false;
     if (trustedDeviceToken) {
-       // ... (verification logic could stay, but omitting detailed check to keep it simple as `user.id` matches)
-       // For now, just set boolean if token exists
-       isTrustedDevice = true; 
+      // ... (verification logic could stay, but omitting detailed check to keep it simple as `user.id` matches)
+      // For now, just set boolean if token exists
+      isTrustedDevice = true;
     }
 
     return res.status(200).json({
