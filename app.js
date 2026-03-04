@@ -47,4 +47,8 @@ app.use('/api/vault', vaultSyncRoutes);
 // Simple endpoint to verify server is up and running
 app.get('/health', (req, res) => res.json({ status: 'Server is running' }));
 
+app.get('/', (req, res) => {
+  res.send('PasswordPal Backend API is running');
+});
+
 export default app;
