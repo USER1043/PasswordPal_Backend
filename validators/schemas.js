@@ -321,3 +321,19 @@ const pushRecordItemSchema = Joi.object({
 export const pushSyncBodySchema = Joi.object({
     records: Joi.array().items(pushRecordItemSchema).min(1).required(),
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/vault — request body (Story 7.1 vault upsert endpoint)
+// ---------------------------------------------------------------------------
+export const vaultUpsertBodySchema = Joi.object({
+    // Optional client-supplied record UUID. Omit to create a new record.
+    id: uuid.optional(),
+    encrypted_data: Joi.string().required(),
+    nonce: Joi.string().required(),
+    // version is used as clientKnownVersion for optimistic locking on updates.
+    // Defaults to 1 (correct for new records, caller should supply the real value on update).
+    version: Joi.number().integer().min(1).default(1),
+    // Must be one of the three allowed vault item types.
+    record_type: Joi.string().valid('credential', 'folder', 'tag').default('credential'),
+});
+

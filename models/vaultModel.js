@@ -101,20 +101,20 @@ export async function updateVaultRecord({ id, encryptedData, nonce, clientKnownV
 
 /**
  * Soft-delete a vault record by setting is_deleted = true.
- * Uses the same RPC to maintain version consistency.
+ * Performs a direct update that also bumps the version counter to maintain
+ * consistency with the optimistic-locking scheme.
  *
  * @param {Object} params
  * @param {string} params.id - UUID of the vault record to delete.
- * @param {number} params.clientKnownVersion - The version the client last saw.
- * @returns {Promise<{ success: boolean, new_version: number|null, server_current_version: number }>}
- * @throws {Error} If the RPC call fails.
+ * @param {number} [params.clientKnownVersion] - The version the client last saw (optional).
+ * @returns {Promise<import('../validators/schemas.js').VaultRecord>}
+ * @throws {Error} If the database update fails.
  */
 export async function deleteVaultRecord({ id, clientKnownVersion }) {
-    // For soft-delete we still use the RPC but pass the existing encrypted_data
-    // The actual deletion is handled by setting is_deleted in the record
+    // Fetch current version so we can bump it safely
     const { data: existing, error: fetchError } = await supabase
         .from("vault_records")
-        .select("encrypted_data, nonce")
+        .select("version")
         .eq("id", id)
         .single();
 
@@ -122,9 +122,6 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
         throw new Error(`Error fetching record for deletion: ${fetchError.message}`);
     }
 
-    // Call RPC with existing data — the is_deleted flag should be set separately
-    // or handled by a dedicated soft-delete RPC. For now, we use a direct update
-    // that still respects version checking.
     const { data, error } = await supabase
         .from("vault_records")
         .update({
@@ -141,4 +138,87 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
     }
 
     return data;
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility shims for the Story 7.1 vaultController (feature/nandan)
+// These wrap the richer model functions above so the controller can call a
+// simpler upsert/delete API without needing to know about the RPC layer.
+// ---------------------------------------------------------------------------
+
+/**
+ * Create or update a vault record (upsert semantics).
+ * If `id` is provided the record is updated via the optimistic-locking RPC
+ * (using the supplied `version` as clientKnownVersion).
+ * If `id` is omitted a fresh record is created via `createVaultItem`.
+ *
+ * @param {Object} params
+ * @param {string} params.userId
+ * @param {string} [params.id] - ID of the record to update (omit to create).
+ * @param {string} params.encryptedData - The encrypted content.
+ * @param {string} params.nonce - The encryption nonce.
+ * @param {number} [params.version=1] - Version number used as clientKnownVersion on update.
+ * @param {string} [params.recordType='credential'] - Vault item type: 'credential' | 'folder' | 'tag'.
+ * @returns {Promise<object>} The saved vault record.
+ */
+export async function upsertVaultItem({ userId, id, encryptedData, nonce, version = 1, recordType = 'credential' }) {
+    if (id) {
+        // Update path — go through the RPC for optimistic locking
+        const rpcResult = await updateVaultRecord({
+            id,
+            encryptedData,
+            nonce,
+            clientKnownVersion: version,
+        });
+
+        // RPC returns { success, new_version, server_current_version }.
+        // Surface a conflict as a proper error so the controller can return 409.
+        if (!rpcResult.success) {
+            const err = new Error(`Version conflict: server is at version ${rpcResult.server_current_version}, client sent ${version}.`);
+            err.code = 'VERSION_CONFLICT';
+            err.serverVersion = rpcResult.server_current_version;
+            throw err;
+        }
+
+        // Re-fetch the full VaultRecord row so both create and update paths
+        // always return the same shape (consistent for controller + client cache).
+        const { data: updated, error: fetchError } = await supabase
+            .from("vault_records")
+            .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+            .eq("id", id)
+            .single();
+
+        if (fetchError) {
+            throw new Error(`Error fetching updated vault record: ${fetchError.message}`);
+        }
+
+        return updated;
+    }
+
+    // Create path — forward the caller-supplied record type
+    return createVaultItem({ userId, encryptedData, nonce, recordType });
+}
+
+
+/**
+ * Soft-delete a vault record (simple signature used by vaultController).
+ *
+ * @param {string} userId - UUID of the owning user (used for additional security check).
+ * @param {string} recordId - UUID of the record to delete.
+ * @returns {Promise<object>} The updated vault record.
+ */
+export async function deleteVaultItem(userId, recordId) {
+    // Verify ownership before deletion
+    const { data: record, error: ownerCheckError } = await supabase
+        .from("vault_records")
+        .select("id")
+        .eq("id", recordId)
+        .eq("user_id", userId)
+        .single();
+
+    if (ownerCheckError || !record) {
+        throw new Error(`Record not found or access denied.`);
+    }
+
+    return deleteVaultRecord({ id: recordId });
 }

@@ -12,6 +12,8 @@ import totpRoutes from './route/totp.js';
 import apiRoutes from './route/api.js';
 import sensitiveRoutes from './route/sensitive.js';
 import vaultSyncRoutes from './route/vaultSync.js';
+import vaultRoutes from './route/vaultRoutes.js';
+import breachRoutes from './route/breachRoutes.js';
 
 const app = express();
 
@@ -22,10 +24,10 @@ app.use(express.json());
 app.use(cookieParser());
 // Enable CORS for Frontend
 app.use(cors({
-    origin: 'http://localhost:5173',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+  origin: 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 // --- Static Files ---
 // Serve scripts directory for testing/demo purposes
@@ -40,8 +42,12 @@ app.use('/auth/totp', totpRoutes);
 app.use('/api', apiRoutes);
 // Sensitive action routes requiring fresh authentication
 app.use('/api', sensitiveRoutes);
-// Vault sync routes (Delta Sync API)
+// Vault sync routes (Delta Sync API — Epic 4)
 app.use('/api/vault', vaultSyncRoutes);
+// Vault Data routes — CRUD endpoints (Get/Update/Delete — Epic 7 Story 7.1)
+app.use('/api/vault', vaultRoutes);
+// Breach Check Proxy (Epic 7 Story 7.3)
+app.use('/api/breach', breachRoutes);
 
 // --- Health Check ---
 // Simple endpoint to verify server is up and running
