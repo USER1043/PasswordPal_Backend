@@ -158,25 +158,47 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
  * @param {string} params.encryptedData - The encrypted content.
  * @param {string} params.nonce - The encryption nonce.
  * @param {number} [params.version=1] - Version number used as clientKnownVersion on update.
+ * @param {string} [params.recordType='credential'] - Vault item type: 'credential' | 'folder' | 'tag'.
  * @returns {Promise<object>} The saved vault record.
  */
-export async function upsertVaultItem({ userId, id, encryptedData, nonce, version = 1 }) {
+export async function upsertVaultItem({ userId, id, encryptedData, nonce, version = 1, recordType = 'credential' }) {
     if (id) {
         // Update path — go through the RPC for optimistic locking
-        const result = await updateVaultRecord({
+        const rpcResult = await updateVaultRecord({
             id,
             encryptedData,
             nonce,
             clientKnownVersion: version,
         });
+
         // RPC returns { success, new_version, server_current_version }.
-        // Return a shape compatible with what the controller expects.
-        return result;
+        // Surface a conflict as a proper error so the controller can return 409.
+        if (!rpcResult.success) {
+            const err = new Error(`Version conflict: server is at version ${rpcResult.server_current_version}, client sent ${version}.`);
+            err.code = 'VERSION_CONFLICT';
+            err.serverVersion = rpcResult.server_current_version;
+            throw err;
+        }
+
+        // Re-fetch the full VaultRecord row so both create and update paths
+        // always return the same shape (consistent for controller + client cache).
+        const { data: updated, error: fetchError } = await supabase
+            .from("vault_records")
+            .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+            .eq("id", id)
+            .single();
+
+        if (fetchError) {
+            throw new Error(`Error fetching updated vault record: ${fetchError.message}`);
+        }
+
+        return updated;
     }
 
-    // Create path — no record_type available from the simple controller, default to 'credential'
-    return createVaultItem({ userId, encryptedData, nonce, recordType: 'credential' });
+    // Create path — forward the caller-supplied record type
+    return createVaultItem({ userId, encryptedData, nonce, recordType });
 }
+
 
 /**
  * Soft-delete a vault record (simple signature used by vaultController).

@@ -28,7 +28,7 @@ export const getVault = async (req, res) => {
 export const updateVault = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { id, encrypted_data, nonce, version } = req.body;
+        const { id, encrypted_data, nonce, version, record_type } = req.body;
 
         // Basic validation - we need at least encrypted data and nonce
         if (!encrypted_data || !nonce) {
@@ -40,7 +40,8 @@ export const updateVault = async (req, res) => {
             id,
             encryptedData: encrypted_data,
             nonce,
-            version
+            version,
+            recordType: record_type,   // forward caller-supplied type; shim defaults to 'credential'
         });
 
         res.json({
@@ -48,6 +49,14 @@ export const updateVault = async (req, res) => {
             item: result
         });
     } catch (error) {
+        // Optimistic locking conflict — tell the client what the server version is
+        // so it can re-pull and retry.
+        if (error.code === 'VERSION_CONFLICT') {
+            return res.status(409).json({
+                error: 'Version conflict. Fetch the latest record and retry.',
+                server_version: error.serverVersion,
+            });
+        }
         console.error("Update Vault Error:", error);
         res.status(500).json({ error: "Failed to save vault item." });
     }
