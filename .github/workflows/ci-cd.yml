@@ -1,0 +1,143 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ──────────────────────────────────────────
+  # JOB 1: Lint & Unit Tests
+  # ──────────────────────────────────────────
+  test:
+    name: Lint & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+        env:
+          # Provide dummy env vars so modules load without a real DB
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          JWT_SECRET: ci-test-secret-do-not-use
+          JWT_REFRESH_SECRET: ci-test-refresh-secret
+          SESSION_SECRET: ci-test-session-secret
+          SUPABASE_URL: https://placeholder.supabase.co
+          SUPABASE_KEY: placeholder-key
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: |
+            coverage/
+            test-results/
+
+  # ──────────────────────────────────────────
+  # JOB 2: Security Audit
+  # ──────────────────────────────────────────
+  security:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit for vulnerabilities
+        # Allow high-severity only for dev dependencies; fail on critical in production deps
+        run: npm audit --audit-level=critical --omit=dev
+
+  # ──────────────────────────────────────────
+  # JOB 3: Deploy to Render (main branch only)
+  # ──────────────────────────────────────────
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          echo "Triggering Render deployment..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+
+          if [ "$RESPONSE" -ne 200 ] && [ "$RESPONSE" -ne 201 ]; then
+            echo "❌ Render deploy hook returned HTTP $RESPONSE"
+            exit 1
+          fi
+          echo "✅ Render deploy triggered (HTTP $RESPONSE)"
+
+      - name: Wait for Render deployment to complete
+        run: |
+          echo "Waiting 90 seconds for Render to build and start..."
+          sleep 90
+
+      - name: Health check — backend is live
+        run: |
+          MAX_RETRIES=10
+          SLEEP_SECONDS=15
+          HEALTH_URL="https://passwordpal-backend.onrender.com/health"
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES — checking $HEALTH_URL ..."
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL")
+            if [ "$STATUS" -eq 200 ]; then
+              echo "✅ Backend is healthy (HTTP 200)"
+              exit 0
+            fi
+            echo "  → Got HTTP $STATUS, retrying in ${SLEEP_SECONDS}s..."
+            sleep $SLEEP_SECONDS
+          done
+
+          echo "❌ Backend failed health check after $MAX_RETRIES attempts"
+          exit 1
+
+  # ──────────────────────────────────────────
+  # JOB 4: Notify on failure
+  # ──────────────────────────────────────────
+  notify-failure:
+    name: Notify on Pipeline Failure
+    runs-on: ubuntu-latest
+    needs: [test, security, deploy]
+    if: failure()
+
+    steps:
+      - name: Post failure notification
+        run: |
+          echo "Pipeline failed on branch ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          # Replace with Slack/Discord webhook if desired:
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+          #   -H 'Content-type: application/json' \
+          #   -d '{"text":"❌ PasswordPal backend pipeline failed on `${{ github.ref_name }}` by ${{ github.actor }}"}'
