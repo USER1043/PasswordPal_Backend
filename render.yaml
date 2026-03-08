@@ -1,0 +1,40 @@
+# render.yaml — PasswordPal Backend
+# Place this file at the root of the Backend repo.
+# Render will detect it and use it for all service configuration.
+# Docs: https://render.com/docs/infrastructure-as-code
+
+services:
+  - type: web
+    name: passwordpal-backend
+    runtime: node
+    region: oregon          # Change to: frankfurt | singapore | ohio as needed
+    plan: starter           # free | starter | standard | pro
+
+    # ── Build & Start ──────────────────────────────────────────────────────
+    buildCommand: npm ci
+    startCommand: npm start
+
+    # ── Auto-deploy ────────────────────────────────────────────────────────
+    autoDeploy: false        # Controlled by GitHub Actions deploy hook instead
+
+    # ── Health Check ───────────────────────────────────────────────────────
+    healthCheckPath: /health
+
+    # ── Environment Variables ──────────────────────────────────────────────
+    # Secret values (DATABASE_URL, JWT_SECRET etc.) must be set manually in
+    # the Render dashboard under Environment > Secret Files / Env Vars.
+    # Only non-secret config is listed here.
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+
+      # These are secret — set them in the Render dashboard, NOT here:
+      # DATABASE_URL          → postgresql://...
+      # JWT_SECRET            → (random 64-char hex)
+      # JWT_REFRESH_SECRET    → (random 64-char hex)
+      # SESSION_SECRET        → (random 64-char hex)
+      # SUPABASE_URL          → https://<project>.supabase.co
+      # SUPABASE_KEY          → <service-role key>
+      # DOTENV_PRIVATE_KEY    → (if using @dotenvx encrypted .env)
