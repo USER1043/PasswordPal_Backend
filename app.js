@@ -54,7 +54,7 @@ app.use('/api/breach', breachRoutes);
 app.get('/health', (req, res) => res.json({ status: 'Server is running' }));
 
 app.get('/', (req, res) => {
-  res.send('PasswordPal Backend API is running');
+  res.send('PasswordPal Backend API is running successfully!');
 });
 
 // Health check — must respond before the DB pool is needed
