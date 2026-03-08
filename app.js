@@ -57,4 +57,9 @@ app.get('/', (req, res) => {
   res.send('PasswordPal Backend API is running');
 });
 
+// Health check — must respond before the DB pool is needed
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', ts: new Date().toISOString() });
+});
+
 export default app;
