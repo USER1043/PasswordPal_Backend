@@ -33,22 +33,12 @@ jobs:
       - name: Run unit tests
         run: npm test
         env:
-          # Provide dummy env vars so modules load without a real DB
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           JWT_SECRET: ci-test-secret-do-not-use
           JWT_REFRESH_SECRET: ci-test-refresh-secret
           SESSION_SECRET: ci-test-session-secret
           SUPABASE_URL: https://placeholder.supabase.co
           SUPABASE_KEY: placeholder-key
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: backend-test-results
-          path: |
-            coverage/
-            test-results/
 
   # ──────────────────────────────────────────
   # JOB 2: Security Audit
@@ -72,7 +62,6 @@ jobs:
         run: npm ci
 
       - name: Audit for vulnerabilities
-        # Allow high-severity only for dev dependencies; fail on critical in production deps
         run: npm audit --audit-level=critical --omit=dev
 
   # ──────────────────────────────────────────
@@ -91,11 +80,14 @@ jobs:
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
 
-          if [ "$RESPONSE" -ne 200 ] && [ "$RESPONSE" -ne 201 ]; then
-            echo "❌ Render deploy hook returned HTTP $RESPONSE"
+          echo "Render responded with HTTP $RESPONSE"
+
+          # FIX: Render returns 202 Accepted (not 200) when it queues a deploy
+          if [ "$RESPONSE" -ne 200 ] && [ "$RESPONSE" -ne 201 ] && [ "$RESPONSE" -ne 202 ]; then
+            echo "❌ Unexpected HTTP response: $RESPONSE"
             exit 1
           fi
-          echo "✅ Render deploy triggered (HTTP $RESPONSE)"
+          echo "✅ Render deploy triggered successfully (HTTP $RESPONSE)"
 
       - name: Wait for Render deployment to complete
         run: |
@@ -137,7 +129,3 @@ jobs:
           echo "Pipeline failed on branch ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
           echo "Author: ${{ github.actor }}"
-          # Replace with Slack/Discord webhook if desired:
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
-          #   -H 'Content-type: application/json' \
-          #   -d '{"text":"❌ PasswordPal backend pipeline failed on `${{ github.ref_name }}` by ${{ github.actor }}"}'
