@@ -6,6 +6,7 @@ import {
   getUserByEmail,
   getUserById,
 } from "../models/userModel.js";
+import { supabase } from "../config/db.js";
 import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { validateRequest } from "../validators/middleware.js";
@@ -24,6 +25,7 @@ const registerBodySchema = Joi.object({
   salt: Joi.string().required(),
   wrapped_mek: Joi.string().required(),
   auth_hash: Joi.string().required(),
+  recovery_key_hash: Joi.string().hex().length(64).required(), // SHA-256 hex of the recovery key
 });
 
 const loginBodySchema = Joi.object({
@@ -42,17 +44,25 @@ const RATE_LIMIT_WINDOW_MINUTES = 15;
 // Hashes auth_hash with Argon2id before storing as server_hash.
 router.post("/register", validateRequest(registerBodySchema), async (req, res) => {
   try {
-    const { email, salt, wrapped_mek, auth_hash } = req.body;
+    const { email, salt, wrapped_mek, auth_hash, recovery_key_hash } = req.body;
 
     // Double Hashing: Hash the client's auth_hash (which acts as a password)
     const server_hash = await argon2.hash(auth_hash);
 
-    await createUser({
+    const user = await createUser({
       email,
       salt,
       server_hash,
       wrapped_mek,
     });
+
+    // Store the recovery key hash for future account recovery
+    const { error: rkError } = await supabase
+      .from("recovery_keys")
+      .insert({ user_id: user.id, key_hash: recovery_key_hash });
+    if (rkError) {
+      console.error("Failed to save recovery key hash:", rkError.message);
+    }
 
     return res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
