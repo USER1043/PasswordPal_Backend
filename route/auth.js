@@ -56,10 +56,13 @@ router.post("/register", validateRequest(registerBodySchema), async (req, res) =
       wrapped_mek,
     });
 
-    // Store the recovery key hash for future account recovery
+    // Hash the recovery key hash with Argon2id before storing.
+    // Argon2 generates a new random salt per call, so re-hashing after use
+    // rotates the stored value, invalidating older comparisons.
+    const hashedRecoveryKey = await argon2.hash(recovery_key_hash);
     const { error: rkError } = await supabase
       .from("recovery_keys")
-      .insert({ user_id: user.id, key_hash: recovery_key_hash });
+      .insert({ user_id: user.id, key_hash: hashedRecoveryKey });
     if (rkError) {
       console.error("Failed to save recovery key hash:", rkError.message);
     }
@@ -318,6 +321,79 @@ router.post("/verify-password", async (req, res) => {
   } catch (err) {
     console.error("Re-auth error:", err);
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Recovery: Reset master password using the recovery key
+// The client re-wraps the existing MEK under a new password and sends new credentials.
+router.post("/recover", async (req, res) => {
+  try {
+    const { email, recovery_key, new_salt, new_wrapped_mek, new_auth_hash } = req.body;
+
+    if (!email || !recovery_key || !new_salt || !new_wrapped_mek || !new_auth_hash) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // 1. Look up user by email
+    const user = await getUserByEmail(email);
+    if (!user) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    // 2. Look up stored recovery key hash
+    const { data: rkRow, error: rkErr } = await supabase
+      .from("recovery_keys")
+      .select("key_hash")
+      .eq("user_id", user.id)
+      .single();
+
+    if (rkErr || !rkRow) {
+      return res.status(404).json({ error: "No recovery key on file for this account" });
+    }
+
+    // 3. SHA-256 hash the provided recovery key to get the canonical check value,
+    //    then verify it against the Argon2-hashed version stored in DB.
+    const { createHash } = await import("crypto");
+    const providedSha256 = createHash("sha256").update(recovery_key).digest("hex");
+
+    const keyMatches = await argon2.verify(rkRow.key_hash, providedSha256);
+    if (!keyMatches) {
+      return res.status(401).json({ error: "Invalid recovery key" });
+    }
+
+    // 4. Hash the new auth_hash with Argon2id
+    const new_server_hash = await argon2.hash(new_auth_hash);
+
+    // 5. Update user credentials
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({
+        salt: new_salt,
+        wrapped_mek: new_wrapped_mek,
+        server_hash: new_server_hash,
+      })
+      .eq("id", user.id);
+
+    if (updateError) throw updateError;
+
+    // 6. Rotate the stored recovery key hash (re-hash with new Argon2 salt)
+    //    so this recovery key cannot be replayed in another recovery attempt.
+    const rotatedHash = await argon2.hash(providedSha256);
+    await supabase
+      .from("recovery_keys")
+      .update({ key_hash: rotatedHash })
+      .eq("user_id", user.id);
+
+    // 7. Revoke all existing device sessions (old credentials are now invalid)
+    await supabase
+      .from("user_devices")
+      .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+      .eq("user_id", user.id);
+
+    return res.status(200).json({ message: "Account recovered successfully. Please log in with your new password." });
+  } catch (err) {
+    console.error("Account recovery error:", err?.message || err);
+    return res.status(500).json({ error: "Internal server error", detail: err?.message });
   }
 });
 
