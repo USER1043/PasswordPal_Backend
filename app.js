@@ -13,6 +13,7 @@ import apiRoutes from './route/api.js';
 import sensitiveRoutes from './route/sensitive.js';
 import vaultSyncRoutes from './route/vaultSync.js';
 import vaultRoutes from './route/vaultRoutes.js';
+import deviceRoutes from './route/deviceRoutes.js';
 import breachRoutes from './route/breachRoutes.js';
 import auditRoutes from './route/auditRoutes.js';
 
@@ -37,7 +38,7 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -58,6 +59,8 @@ app.use('/api', sensitiveRoutes);
 app.use('/api/vault', vaultSyncRoutes);
 // Vault Data routes — CRUD endpoints (Get/Update/Delete — Epic 7 Story 7.1)
 app.use('/api/vault', vaultRoutes);
+// Device management routes
+app.use('/api/devices', deviceRoutes);
 // Breach Check Proxy (Epic 7 Story 7.3)
 app.use('/api/breach', breachRoutes);
 // Audit Log routes (Login History — Epic 7 Story 7.6)

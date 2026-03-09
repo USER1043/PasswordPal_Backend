@@ -10,6 +10,8 @@ import {
 import { encryptData, decryptData } from "../utils/encryption.js";
 import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
 import bcrypt from "bcryptjs";
+import { getUserById } from "../models/userModel.js";
+import { registerUserDevice } from "../models/deviceModel.js";
 
 const router = express.Router();
 
@@ -237,10 +239,45 @@ router.post("/verify-login", async (req, res) => {
         });
       }
 
+      // Issue full session tokens now that MFA is complete
+      const user = await getUserById(userId);
+
+      const accessToken = jwt.sign(
+        { id: user.id, email: user.email },
+        process.env.JWT_SECRET,
+        { expiresIn: "15m" }
+      );
+      const refreshToken = jwt.sign(
+        { id: user.id },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.cookie("sb-access-token", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000,
+      });
+
+      res.cookie("sb-refresh-token", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      // Register device now that we have a real refresh token
+      const userAgent = req.headers["user-agent"] || "Unknown Device";
+      await registerUserDevice(user.id, userAgent, refreshToken).catch(err => {
+        console.error("Error registering device after TOTP - code:", err?.code, "message:", err?.message);
+      });
+
       return res.status(200).json({
         success: true,
         message: "TOTP verification successful. Login complete.",
         authenticated: true,
+        user: { id: user.id, email: user.email },
       });
     } catch (decryptErr) {
       console.error("Decryption error:", decryptErr);

@@ -10,6 +10,11 @@ import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAt
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { validateRequest } from "../validators/middleware.js";
 import Joi from "joi";
+import {
+  registerUserDevice,
+  updateDeviceToken,
+  revokeDeviceByToken,
+} from "../models/deviceModel.js";
 
 const router = express.Router();
 
@@ -186,6 +191,11 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    const deviceName = userAgent || "Unknown Device";
+    await registerUserDevice(user.id, deviceName, refreshToken).catch(err => {
+      console.error("Error registering device - code:", err?.code, "message:", err?.message, "details:", err?.details);
+    });
+
     return res.status(200).json({
       message: "Login successful",
       user: { id: user.id, email: user.email },
@@ -234,6 +244,8 @@ router.post("/refresh", async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    await updateDeviceToken(refreshToken, newRefreshToken).catch(err => console.error("Error updating device token:", err));
+
     return res.status(200).json({ message: "Token refreshed successfully" });
   } catch (err) {
     res.clearCookie("sb-access-token");
@@ -244,6 +256,10 @@ router.post("/refresh", async (req, res) => {
 
 // Logout Endpoint
 router.post("/logout", async (req, res) => {
+  const refreshToken = req.cookies["sb-refresh-token"];
+  if (refreshToken) {
+    await revokeDeviceByToken(refreshToken).catch(err => console.error("Error revoking device on logout:", err));
+  }
   res.clearCookie("sb-access-token");
   res.clearCookie("sb-refresh-token");
   return res.status(200).json({ message: "Logged out successfully" });

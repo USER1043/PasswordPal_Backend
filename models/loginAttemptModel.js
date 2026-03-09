@@ -16,16 +16,27 @@ import { supabase } from "../config/db.js";
  * @throws {Error} If the database insert fails.
  */
 export async function recordLoginAttempt({ userId, ipAddress, wasSuccessful, userAgent = null }) {
-    const { data, error } = await supabase
+    const payload = {
+        user_id: userId,
+        ip_address: ipAddress,
+        was_successful: wasSuccessful,
+        user_agent: userAgent,
+    };
+
+    let { data, error } = await supabase
         .from("login_attempts")
-        .insert([{
-            user_id: userId,
-            ip_address: ipAddress,
-            was_successful: wasSuccessful,
-            user_agent: userAgent,
-        }])
+        .insert([payload])
         .select()
         .single();
+
+    // If user_id FK violation (user doesn't exist yet), retry with null user_id
+    if (error && error.code === "23503") {
+        ({ data, error } = await supabase
+            .from("login_attempts")
+            .insert([{ ...payload, user_id: null }])
+            .select()
+            .single());
+    }
 
     if (error) {
         throw new Error(`Error recording login attempt: ${error.message}`);
