@@ -2,7 +2,7 @@
 // Main Express application configuration.
 // This file sets up middleware, routes, and global handlers.
 
-import 'dotenv/config'; // Load environment variables from .env file
+// Environment variables loaded by dotenvx via npm script
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -14,6 +14,7 @@ import sensitiveRoutes from './route/sensitive.js';
 import vaultSyncRoutes from './route/vaultSync.js';
 import vaultRoutes from './route/vaultRoutes.js';
 import breachRoutes from './route/breachRoutes.js';
+import auditRoutes from './route/auditRoutes.js';
 
 const app = express();
 
@@ -36,7 +37,7 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,
+  credentials: true
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -59,6 +60,8 @@ app.use('/api/vault', vaultSyncRoutes);
 app.use('/api/vault', vaultRoutes);
 // Breach Check Proxy (Epic 7 Story 7.3)
 app.use('/api/breach', breachRoutes);
+// Audit Log routes (Login History — Epic 7 Story 7.6)
+app.use('/api/audit-logs', auditRoutes);
 
 // --- Health Check ---
 // Simple endpoint to verify server is up and running

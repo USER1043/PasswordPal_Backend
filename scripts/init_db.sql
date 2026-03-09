@@ -47,16 +47,48 @@ CREATE TABLE IF NOT EXISTS public.user_devices (
 -- Index for looking up devices by user
 CREATE INDEX IF NOT EXISTS idx_user_devices_user_id ON public.user_devices(user_id);
 
--- Row Level Security (RLS) policies would typically be added here for a robust Supabase setup.
--- For now, we enable RLS on all tables to be safe by default.
+-- 4. Create mfa_settings table
+-- Stores TOTP secrets and backup codes separately from the users table.
+CREATE TABLE IF NOT EXISTS public.mfa_settings (
+    user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+    totp_secret_enc TEXT,              -- Server-side encrypted TOTP secret
+    is_totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    backup_codes_enc TEXT,             -- Encrypted/hashed backup codes blob (JSON array)
+    codes_used INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 5. Create login_attempts table
+-- Tracks login attempts for rate-limiting and security auditing.
+CREATE TABLE IF NOT EXISTS public.login_attempts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    ip_address TEXT NOT NULL,
+    was_successful BOOLEAN NOT NULL DEFAULT FALSE,
+    user_agent TEXT,
+    attempt_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes for efficient rate-limit queries
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON public.login_attempts(ip_address);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON public.login_attempts(attempt_time);
+
+-- Row Level Security (RLS)
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vault_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mfa_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.login_attempts ENABLE ROW LEVEL SECURITY;
 
--- Basic policies (adjust as needed for specific auth logic):
--- Users can see their own data
+-- Drop existing policies first so script is re-runnable
+DROP POLICY IF EXISTS "Users can see their own data" ON public.users;
+DROP POLICY IF EXISTS "Users can manage their own vault records" ON public.vault_records;
+DROP POLICY IF EXISTS "Users can manage their own devices" ON public.user_devices;
+DROP POLICY IF EXISTS "Users can manage their own mfa settings" ON public.mfa_settings;
+
+-- Recreate policies
 CREATE POLICY "Users can see their own data" ON public.users FOR SELECT USING (auth.uid() = id);
--- Vault records are only accessible by the owner
 CREATE POLICY "Users can manage their own vault records" ON public.vault_records FOR ALL USING (auth.uid() = user_id);
--- Devices are only accessible by the owner
 CREATE POLICY "Users can manage their own devices" ON public.user_devices FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage their own mfa settings" ON public.mfa_settings FOR ALL USING (auth.uid() = user_id);
+
