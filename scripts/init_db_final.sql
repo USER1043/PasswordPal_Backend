@@ -273,3 +273,8 @@ GRANT ALL ON public.recovery_keys  TO service_role, authenticated, anon;
 GRANT ALL ON public.refresh_tokens TO service_role, authenticated, anon;
 GRANT ALL ON public.sync_queue     TO service_role, authenticated, anon;
 GRANT ALL ON public.conflicts      TO service_role, authenticated, anon;
+-- users and user_devices also need explicit grants so that the Node service_role
+-- client can insert/update after a schema reload without losing default privileges.
+GRANT ALL ON public.users          TO service_role, authenticated, anon;
+GRANT ALL ON public.vault_records  TO service_role, authenticated, anon;
+GRANT ALL ON public.user_devices   TO service_role, authenticated, anon;
