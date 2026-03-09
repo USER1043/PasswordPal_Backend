@@ -23,8 +23,19 @@ app.use(express.json());
 // Parse cookies from request headers (used for session tokens)
 app.use(cookieParser());
 // Enable CORS for Frontend
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:5173', // react local dev
+  'http://tauri.localhost', // for windows
+  'tauri://localhost' // for linux and macOS
+];
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
