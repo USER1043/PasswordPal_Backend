@@ -265,6 +265,57 @@ CREATE POLICY "Allow all for conflicts"
     ON public.conflicts       FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================================================
+-- STORED PROCEDURES (RPCs)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.update_vault_record(
+    p_id UUID,
+    p_encrypted_data TEXT,
+    p_nonce TEXT,
+    p_client_known_version INTEGER
+) RETURNS json AS $$
+DECLARE
+    v_current_version INTEGER;
+    v_new_version INTEGER;
+BEGIN
+    -- Get current version with FOR UPDATE to lock the row
+    SELECT version INTO v_current_version
+    FROM public.vault_records
+    WHERE id = p_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Record not found';
+    END IF;
+
+    -- Optimistic locking check
+    IF v_current_version > p_client_known_version THEN
+        RETURN json_build_object(
+            'success', false,
+            'new_version', null,
+            'server_current_version', v_current_version
+        );
+    END IF;
+
+    -- Proceed with update
+    v_new_version := v_current_version + 1;
+
+    UPDATE public.vault_records
+    SET 
+        encrypted_data = p_encrypted_data,
+        nonce = p_nonce,
+        version = v_new_version,
+        updated_at = NOW()
+    WHERE id = p_id;
+
+    RETURN json_build_object(
+        'success', true,
+        'new_version', v_new_version,
+        'server_current_version', v_new_version
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ============================================================================
 -- GRANTS
 -- ============================================================================
 GRANT ALL ON public.mfa_settings   TO service_role, authenticated, anon;
