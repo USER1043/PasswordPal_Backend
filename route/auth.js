@@ -7,6 +7,7 @@ import {
   getUserById,
 } from "../models/userModel.js";
 import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
+import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { validateRequest } from "../validators/middleware.js";
 import Joi from "joi";
 
@@ -50,11 +51,12 @@ router.post("/register", validateRequest(registerBodySchema), async (req, res) =
 
     return res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
-    console.error("Registration error:", err);
+    console.error("Registration error:", err?.message || err);
+    console.error("Registration error details:", JSON.stringify(err, null, 2));
     if (err.code === "23505") { // Unique violation for email
       return res.status(409).json({ error: "Email already exists" });
     }
-    return res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error", detail: err?.message || "Unknown error" });
   }
 });
 
@@ -106,7 +108,7 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
       user = await getUserByEmail(email);
     } catch (err) {
       // Record failed attempt (user not found)
-      await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
+      await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(e => console.error("Audit log error:", e.message));
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -115,14 +117,50 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
 
     if (!isValid) {
       // Record failed attempt
-      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
+      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(e => console.error("Audit log error:", e.message));
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Record successful attempt
-    await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent }).catch(() => { });
+    // Record successful password verification in audit log
+    await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent }).catch(e => console.error("Audit log error:", e.message));
 
-    // Login successful - Issue Tokens
+    // --- Check for trusted device ---
+    const trustedDeviceToken = req.cookies["sb-trusted-device"];
+    let isTrustedDevice = false;
+    if (trustedDeviceToken) {
+      try {
+        const decoded = jwt.verify(trustedDeviceToken, process.env.JWT_SECRET);
+        isTrustedDevice = decoded.id === user.id && decoded.type === "trusted-device";
+      } catch {
+        isTrustedDevice = false;
+      }
+    }
+
+    // --- MFA Gate: Check if TOTP is enabled ---
+    // If user has 2FA enabled and this is NOT a trusted device, require TOTP before issuing tokens
+    const mfaSettings = await getMfaSettings(user.id);
+    if (mfaSettings?.is_totp_enabled && !isTrustedDevice) {
+      // Issue a short-lived MFA pending token (5 min) — used only for the TOTP step
+      const mfaPendingToken = jwt.sign(
+        { id: user.id, email: user.email, type: "mfa-pending" },
+        process.env.JWT_SECRET,
+        { expiresIn: "5m" }
+      );
+
+      res.cookie("sb-access-token", mfaPendingToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 5 * 60 * 1000,
+      });
+
+      return res.status(200).json({
+        mfa_required: true,
+        message: "Password verified. Please complete MFA verification.",
+      });
+    }
+
+    // --- Issue full session tokens (no MFA, or trusted device) ---
     const accessToken = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET,
@@ -134,35 +172,24 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    // Set HttpOnly cookies
     res.cookie("sb-access-token", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      maxAge: 15 * 60 * 1000,
     });
 
     res.cookie("sb-refresh-token", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
-
-    // Check for Trusted Device (logic retained from previous, simplified)
-    const trustedDeviceToken = req.cookies["sb-trusted-device"];
-    let isTrustedDevice = false;
-    if (trustedDeviceToken) {
-      // ... (verification logic could stay, but omitting detailed check to keep it simple as `user.id` matches)
-      // For now, just set boolean if token exists
-      isTrustedDevice = true;
-    }
 
     return res.status(200).json({
       message: "Login successful",
       user: { id: user.id, email: user.email },
       trusted_device: isTrustedDevice,
-      // Note: wrapped_mek is already known by client from Step 1, but we can send it again if useful.
     });
 
   } catch (err) {

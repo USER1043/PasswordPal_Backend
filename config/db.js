@@ -1,4 +1,4 @@
-import "dotenv/config";
+// Environment variables are loaded by dotenvx via npm script
 import { createClient } from "@supabase/supabase-js";
 
 // --- Supabase Client Initialization ---

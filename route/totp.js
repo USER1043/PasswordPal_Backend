@@ -3,36 +3,43 @@ import jwt from "jsonwebtoken";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
 import {
-  updateUserTotpSecret,
-  getUserTotpSecret,
-  disableUserTotp,
-  updateUserBackupCodes,
-  consumeUserBackupCode,
-} from "../models/mfaModel.js";
+  getMfaSettings,
+  upsertMfaSettings,
+  disableMfa,
+} from "../models/mfaSettingsModel.js";
 import { encryptData, decryptData } from "../utils/encryption.js";
 import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
+import bcrypt from "bcryptjs";
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// Helper: extract userId from JWT cookie
+// ---------------------------------------------------------------------------
+function getUserIdFromToken(req) {
+  const token = req.cookies["sb-access-token"];
+  if (!token) return null;
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  return decoded.id;
+}
 
 // Task 5.2.1: Setup TOTP
 // Generates a new TOTP secret and returns a QR code for the user to scan.
 // The secret is NOT saved yet; it must be verified first.
 router.post("/setup", async (req, res) => {
   try {
-    // Get user ID from JWT token
     const token = req.cookies["sb-access-token"];
     if (!token) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
 
     // Generate TOTP secret
     const secret = speakeasy.generateSecret({
-      name: `PasswordPal (${decoded.email})`,
+      name: `PasswordPal (${decoded.email || decoded.id})`,
       issuer: "PasswordPal",
-      length: 32, // Generate a 32-character secret
+      length: 20, // 20 bytes = 32 base32 chars (standard for authenticator apps)
     });
 
     // Generate QR code as data URL
@@ -58,7 +65,7 @@ router.post("/setup", async (req, res) => {
 
 // Task 5.2.2: Verify Setup
 // Validates the 6-digit code from the app to confirm the user scanned the QR correctly.
-// If valid, encrypts and saves the secret to the DB, enabling MFA.
+// If valid, encrypts and saves the secret to the mfa_settings table, enabling MFA.
 router.post("/verify-setup", async (req, res) => {
   try {
     const { secret, code } = req.body;
@@ -75,8 +82,8 @@ router.post("/verify-setup", async (req, res) => {
     const verified = speakeasy.totp.verify({
       secret: secret,
       encoding: "base32",
-      token: code,
-      window: 2, // Allow 30 seconds before and after for clock skew
+      token: String(code),
+      window: 4, // Allow ±120 seconds for clock skew between server and phone
     });
 
     if (!verified) {
@@ -84,30 +91,51 @@ router.post("/verify-setup", async (req, res) => {
     }
 
     // Get user ID from JWT token
-    const token = req.cookies["sb-access-token"];
-    if (!token) {
+    const userId = getUserIdFromToken(req);
+    if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
-
-    // Task 5.2.3: Store TOTP secret securely on the server (encrypted)
+    // Store TOTP secret securely in mfa_settings table (encrypted)
     try {
+      // Debug: log the userId being used
+      console.log("TOTP verify-setup: storing secret for userId:", userId);
+
+      // Verify user exists in users table before FK insert
+      const { getUserById } = await import("../models/userModel.js");
+      const userCheck = await getUserById(userId);
+      if (!userCheck) {
+        console.error("TOTP verify-setup: userId not found in users table:", userId);
+        return res.status(400).json({ error: "User not found. Please re-login and try again." });
+      }
+
       const encryptedSecret = encryptData(secret);
-      const updatedUser = await updateUserTotpSecret(userId, encryptedSecret);
+      await upsertMfaSettings({
+        userId,
+        totpSecretEnc: encryptedSecret,
+        isTotpEnabled: true,
+      });
+
+      // Generate backup codes on initial setup
+      const codes = generateBackupCodes(10, 10);
+      const hashed = await hashBackupCodes(codes);
+      await upsertMfaSettings({
+        userId,
+        backupCodesEnc: JSON.stringify(hashed),
+      });
 
       return res.status(200).json({
         success: true,
         message: "TOTP setup confirmed and secret stored securely.",
         code_verified: true,
         totp_enabled: true,
+        backupCodes: codes,
       });
     } catch (dbErr) {
       console.error("Database error storing TOTP secret:", dbErr);
       return res
         .status(500)
-        .json({ error: "Failed to store TOTP secret. Please try again." });
+        .json({ error: `Failed to store TOTP secret: ${dbErr.message}` });
     }
   } catch (err) {
     console.error("TOTP verification error:", err);
@@ -122,19 +150,16 @@ router.post("/verify-setup", async (req, res) => {
 // Checks if the current user has TOTP enabled.
 router.get("/status", async (req, res) => {
   try {
-    const token = req.cookies["sb-access-token"];
-    if (!token) {
+    const userId = getUserIdFromToken(req);
+    if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
-
-    const userTotp = await getUserTotpSecret(userId);
+    const settings = await getMfaSettings(userId);
 
     return res.status(200).json({
       success: true,
-      totp_enabled: userTotp.totp_enabled || false,
+      totp_enabled: settings?.is_totp_enabled || false,
     });
   } catch (err) {
     console.error("Get TOTP status error:", err);
@@ -147,8 +172,6 @@ router.get("/status", async (req, res) => {
 
 // Verify Login with TOTP
 // Second step of login for MFA-enabled users.
-// Verifies the 6-digit code and completes the authentication process.
-// Can also set a "trusted device" cookie if requested.
 router.post("/verify-login", async (req, res) => {
   try {
     const { code } = req.body;
@@ -161,19 +184,15 @@ router.post("/verify-login", async (req, res) => {
       return res.status(400).json({ error: "Code must be a 6-digit number" });
     }
 
-    // Get user ID from JWT token (temporary token issued after password verification)
-    const token = req.cookies["sb-access-token"];
-    if (!token) {
+    const userId = getUserIdFromToken(req);
+    if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
+    // Get user's MFA settings
+    const settings = await getMfaSettings(userId);
 
-    // Get user's TOTP secret
-    const userTotp = await getUserTotpSecret(userId);
-
-    if (!userTotp.totp_enabled || !userTotp.totp_secret) {
+    if (!settings?.is_totp_enabled || !settings?.totp_secret_enc) {
       return res
         .status(400)
         .json({ error: "TOTP is not enabled for this user" });
@@ -181,14 +200,14 @@ router.post("/verify-login", async (req, res) => {
 
     try {
       // Decrypt the stored TOTP secret
-      const decryptedSecret = decryptData(userTotp.totp_secret);
+      const decryptedSecret = decryptData(settings.totp_secret_enc);
 
       // Verify the 6-digit code against the secret
       const verified = speakeasy.totp.verify({
         secret: decryptedSecret,
         encoding: "base32",
-        token: code,
-        window: 2, // Allow 30 seconds before and after for clock skew
+        token: String(code),
+        window: 4, // Allow ±120 seconds for clock skew between server and phone
       });
 
       if (!verified) {
@@ -197,14 +216,9 @@ router.post("/verify-login", async (req, res) => {
           .json({ error: "Invalid code. Please try again." });
       }
 
-      // TOTP code verified successfully
-
       // Task 5.4.2: Issue long-lived MFA token if user requested to trust this device
       const { trust_device } = req.body;
       if (trust_device) {
-        // Generate a simple high-entropy token for the cookie
-        // In a real app, store this hash in DB to allow revocation.
-        // For this story, we'll use a signed JWT acts as the "device token"
         const deviceToken = jwt.sign(
           {
             id: userId,
@@ -244,18 +258,14 @@ router.post("/verify-login", async (req, res) => {
 });
 
 // Disable TOTP
-// Turns off MFA for the user.
 router.post("/disable", async (req, res) => {
   try {
-    const token = req.cookies["sb-access-token"];
-    if (!token) {
+    const userId = getUserIdFromToken(req);
+    if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
-
-    await disableUserTotp(userId);
+    await disableMfa(userId);
 
     return res.status(200).json({
       success: true,
@@ -271,27 +281,26 @@ router.post("/disable", async (req, res) => {
   }
 });
 
-export default router;
-
 // Generate Backup Codes
-// Creates 10 new random codes, hashes them, and stores them in DB.
+// Creates 10 new random codes, hashes them, and stores them in mfa_settings.
 // Returns the plaintext codes ONCE for the user to save.
 router.post("/backup-codes/generate", async (req, res) => {
   try {
-    const token = req.cookies["sb-access-token"];
-    if (!token)
+    const userId = getUserIdFromToken(req);
+    if (!userId)
       return res.status(401).json({ error: "Unauthorized - no access token" });
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
 
     // Generate codes and hash them
     const codes = generateBackupCodes(10, 10);
-    const hashed = hashBackupCodes(codes);
+    const hashed = await hashBackupCodes(codes);
 
-    // Store hashed codes server-side
+    // Store hashed codes in mfa_settings
     try {
-      await updateUserBackupCodes(userId, hashed);
+      await upsertMfaSettings({
+        userId,
+        backupCodesEnc: JSON.stringify(hashed),
+        codesUsed: 0,
+      });
     } catch (dbErr) {
       console.error("DB error storing backup codes:", dbErr);
       return res
@@ -300,7 +309,6 @@ router.post("/backup-codes/generate", async (req, res) => {
     }
 
     // Return plaintext codes to user exactly once
-    // If `?download=1` is provided, return a plaintext file attachment for download
     if (req.query && req.query.download === "1") {
       res.setHeader(
         "Content-Disposition",
@@ -314,7 +322,7 @@ router.post("/backup-codes/generate", async (req, res) => {
       .status(200)
       .json({
         success: true,
-        codes,
+        backupCodes: codes,
         message:
           "Backup codes generated. Save them now; they are shown only once.",
       });
@@ -334,19 +342,51 @@ router.post("/backup-codes/redeem", async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "Code is required" });
 
-    const token = req.cookies["sb-access-token"];
-    if (!token)
+    const userId = getUserIdFromToken(req);
+    if (!userId)
       return res.status(401).json({ error: "Unauthorized - no access token" });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id;
-
     try {
-      const result = await consumeUserBackupCode(userId, code);
-      if (!result.consumed)
+      const settings = await getMfaSettings(userId);
+      if (!settings || !settings.backup_codes_enc) {
+        return res
+          .status(401)
+          .json({ error: "No backup codes found" });
+      }
+
+      let hashedCodes = [];
+      try {
+        hashedCodes = JSON.parse(settings.backup_codes_enc);
+      } catch {
+        hashedCodes = [];
+      }
+
+      // Find matching hash
+      let matchedIndex = -1;
+      for (let i = 0; i < hashedCodes.length; i++) {
+        const match = await bcrypt.compare(code, hashedCodes[i]);
+        if (match) {
+          matchedIndex = i;
+          break;
+        }
+      }
+
+      if (matchedIndex === -1) {
         return res
           .status(401)
           .json({ error: "Invalid or already used backup code" });
+      }
+
+      // Remove used code
+      const newHashes = hashedCodes.slice();
+      newHashes.splice(matchedIndex, 1);
+
+      // Update DB with remaining codes
+      await upsertMfaSettings({
+        userId,
+        backupCodesEnc: JSON.stringify(newHashes),
+        codesUsed: (settings.codes_used || 0) + 1,
+      });
 
       return res
         .status(200)
@@ -367,17 +407,9 @@ router.post("/backup-codes/redeem", async (req, res) => {
 
 // Dev-only: generate backup codes without auth/DB for quick local testing
 if (process.env.NODE_ENV !== "production") {
-  router.post("/dev/backup-codes/generate", async (req, res) => {
+  router.post("/dev/backup-codes/generate", async (_req, res) => {
     try {
       const codes = generateBackupCodes(10, 10);
-      if (req.query && req.query.download === "1") {
-        res.setHeader(
-          "Content-Disposition",
-          'attachment; filename="passwordpal_backup_codes.txt"',
-        );
-        res.type("text/plain");
-        return res.status(200).send(codes.join("\n"));
-      }
       return res
         .status(200)
         .json({
@@ -391,3 +423,5 @@ if (process.env.NODE_ENV !== "production") {
     }
   });
 }
+
+export default router;
