@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sensitive Action Re-Auth Demo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        .box {
+            border: 1px solid #ccc;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Master Password Re-prompt Demo</h1>
+
+    <div class="box">
+        <h3>Login First (to get initial token)</h3>
+        <input type="email" id="loginEmail" placeholder="Email" value="test@example.com">
+        <input type="password" id="loginPassword" placeholder="Password" value="password123">
+        <button onclick="login()">Login</button>
+        <p id="loginStatus"></p>
+    </div>
+
+    <div class="box">
+        <h3>Dangerous Actions</h3>
+        <p>These require a "fresh" login (last 5 mins).</p>
+        <button onclick="performSensitiveAction('/api/export', 'POST')">Export Database</button>
+        <button onclick="performSensitiveAction('/api/delete-account', 'DELETE')">Delete Account</button>
+        <p id="actionStatus"></p>
+    </div>
+
+    <!-- Re-Auth Modal -->
+    <div id="reauthModal" class="hidden modal">
+        <div style="background: white; padding: 20px; border-radius: 8px; width: 300px;">
+            <h3>Security Verification</h3>
+            <p>Please confirm your password to continue.</p>
+            <input type="password" id="confirmPassword" placeholder="Master Password"
+                style="width: 100%; margin-bottom: 10px;">
+            <button onclick="confirmPassword()">Confirm</button>
+            <button onclick="closeModal()">Cancel</button>
+            <p id="reauthStatus" style="color: red;"></p>
+        </div>
+    </div>
+
+    <script>
+        let pendingAction = null;
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            try {
+                const res = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    document.getElementById('loginStatus').textContent = 'Logged in! Token is fresh.';
+                    document.getElementById('loginStatus').style.color = 'green';
+                } else {
+                    document.getElementById('loginStatus').textContent = 'Error: ' + data.error;
+                    document.getElementById('loginStatus').style.color = 'red';
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function performSensitiveAction(url, method) {
+            document.getElementById('actionStatus').textContent = 'Processing...';
+
+            try {
+                const res = await fetch(url, { method });
+                const data = await res.json();
+
+                if (res.ok) {
+                    document.getElementById('actionStatus').textContent = 'Success: ' + data.message;
+                    document.getElementById('actionStatus').style.color = 'green';
+                } else {
+                    if (data.code === 'REAUTH_REQUIRED') {
+                        document.getElementById('actionStatus').textContent = 'Re-authentication required...';
+                        document.getElementById('actionStatus').style.color = 'orange';
+                        // Trigger Modal
+                        pendingAction = { url, method };
+                        document.getElementById('reauthModal').classList.remove('hidden');
+                    } else {
+                        document.getElementById('actionStatus').textContent = 'Error: ' + data.error;
+                        document.getElementById('actionStatus').style.color = 'red';
+                    }
+                }
+            } catch (e) {
+                document.getElementById('actionStatus').textContent = 'Network Error';
+            }
+        }
+
+        async function confirmPassword() {
+            const password = document.getElementById('confirmPassword').value;
+            try {
+                const res = await fetch('/auth/verify-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    // Success, close modal and retry action
+                    document.getElementById('reauthModal').classList.add('hidden');
+                    document.getElementById('confirmPassword').value = ''; // clear
+                    document.getElementById('reauthStatus').textContent = '';
+
+                    if (pendingAction) {
+                        performSensitiveAction(pendingAction.url, pendingAction.method);
+                        pendingAction = null;
+                    }
+                } else {
+                    document.getElementById('reauthStatus').textContent = data.error;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('reauthModal').classList.add('hidden');
+            pendingAction = null;
+            document.getElementById('actionStatus').textContent = 'Action cancelled.';
+        }
+    </script>
+</body>
+
+</html>

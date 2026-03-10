@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Trusted Device Demo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+        }
+
+        .box {
+            border: 1px solid #ccc;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-top: 0.5rem;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.5rem;
+        }
+
+        button {
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+        }
+
+        #output {
+            background: #f4f4f4;
+            padding: 1rem;
+            white-space: pre-wrap;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Trusted Device Demo (Task 5.4)</h1>
+
+    <div class="box">
+        <h3>1. Setup Session</h3>
+        <p>Paste a valid JWT `sb-access-token` (from login) to simulate an active partial session.</p>
+        <textarea id="token" rows="3" style="width:100%"></textarea>
+        <button id="setCookie">Set Cookie</button>
+    </div>
+
+    <div class="box">
+        <h3>2. MFA Verification</h3>
+        <label>
+            Enter Google Authenticator Code (6-digit):
+            <input type="text" id="totpCode" placeholder="123456" maxlength="6">
+        </label>
+
+        <label style="margin-top: 1rem; font-weight: bold; background: #eef; padding: 0.5rem;">
+            <input type="checkbox" id="trustDevice">
+            Trust this device for 30 days (Don't ask for codes again)
+        </label>
+
+        <button id="verifyBtn">Verify Login</button>
+    </div>
+
+    <div id="output">Results will appear here...</div>
+
+    <script>
+        // 1. Set Cookie Helper
+        document.getElementById('setCookie').addEventListener('click', () => {
+            const t = document.getElementById('token').value.trim();
+            if (!t) return alert('Paste a token first');
+            document.cookie = `sb-access-token=${t}; path=/; samesite=strict`;
+            alert('Cookie set! Now try verifying.');
+        });
+
+        // 2. Verify Logic
+        document.getElementById('verifyBtn').addEventListener('click', async () => {
+            const code = document.getElementById('totpCode').value.trim();
+            const trustDevice = document.getElementById('trustDevice').checked;
+
+            if (!code) return alert('Enter a code');
+
+            document.getElementById('output').textContent = 'Verifying...';
+
+            try {
+                const res = await fetch('/auth/totp/verify-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, trust_device: trustDevice })
+                });
+
+                const data = await res.json();
+                document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+
+                if (res.ok && data.success) {
+                    document.getElementById('output').textContent += '\n\nSUCCESS! Check Application -> Cookies for "sb-trusted-device".';
+                }
+            } catch (err) {
+                document.getElementById('output').textContent = 'Error: ' + err.message;
+            }
+        });
+    </script>
+</body>
+
+</html>
