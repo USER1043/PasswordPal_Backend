@@ -78,13 +78,20 @@ export async function getDevicesByUserId(userId) {
  * Revoke a specific device by its ID, scoped to the user.
  */
 export async function revokeDeviceById(deviceId, userId) {
-  const { error } = await supabase
+  console.log(`[REVOKE] Attemping to revoke device ${deviceId} for user ${userId}`);
+  const { data, error } = await supabase
     .from("user_devices")
     .update({ is_revoked: true, revoked_at: new Date().toISOString() })
     .eq("id", deviceId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .select();
 
+  console.log(`[REVOKE] Update result: data=${JSON.stringify(data)}, error=${error}`);
   if (error) throw error;
+  if (!data || data.length === 0) {
+    console.warn(`[REVOKE] No rows updated! Either device doesn't exist or doesn't belong to the user.`);
+    throw new Error("Device not found or not owned by user");
+  }
 }
 
 /**

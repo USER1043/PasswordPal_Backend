@@ -31,19 +31,6 @@ router.get('/', verifySession, async (req, res) => {
         }
 
         // Aggregate counts for stats cards (across ALL records, not just this page)
-        const { data: successData } = await supabase
-            .from('login_attempts')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', userId)
-            .eq('was_successful', true);
-
-        const { data: failData, count: failCount } = await supabase
-            .from('login_attempts')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', userId)
-            .eq('was_successful', false);
-
-        // Extract counts properly (head:true returns count in the count field)
         const { count: successCount } = await supabase
             .from('login_attempts')
             .select('*', { count: 'exact', head: true })
