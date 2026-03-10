@@ -177,7 +177,7 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
       res.cookie("sb-access-token", mfaPendingToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         maxAge: 5 * 60 * 1000,
       });
 
@@ -202,14 +202,14 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
     res.cookie("sb-access-token", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
       maxAge: 15 * 60 * 1000,
     });
 
     res.cookie("sb-refresh-token", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -255,14 +255,14 @@ router.post("/refresh", async (req, res) => {
     res.cookie("sb-access-token", newAccessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
       maxAge: 15 * 60 * 1000,
     });
 
     res.cookie("sb-refresh-token", newRefreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -322,7 +322,7 @@ router.post("/verify-password", async (req, res) => {
     res.cookie("sb-access-token", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
       maxAge: 15 * 60 * 1000,
     });
 

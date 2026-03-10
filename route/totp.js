@@ -234,7 +234,7 @@ router.post("/verify-login", async (req, res) => {
         res.cookie("sb-trusted-device", deviceToken, {
           httpOnly: true,
           secure: process.env.NODE_ENV === "production",
-          sameSite: "strict",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
           maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
         });
       }
@@ -256,14 +256,14 @@ router.post("/verify-login", async (req, res) => {
       res.cookie("sb-access-token", accessToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         maxAge: 15 * 60 * 1000,
       });
 
       res.cookie("sb-refresh-token", refreshToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
 
