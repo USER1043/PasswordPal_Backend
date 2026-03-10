@@ -148,9 +148,7 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
 
 /**
  * Create or update a vault record (upsert semantics).
- * If `id` is provided the record is updated via the optimistic-locking RPC
- * (using the supplied `version` as clientKnownVersion).
- * If `id` is omitted a fresh record is created via `createVaultItem`.
+ * Replaces the fragile check-then-act logic with a native atomic Postgres RPC UPSERT.
  *
  * @param {Object} params
  * @param {string} params.userId
@@ -162,89 +160,54 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
  * @returns {Promise<object>} The saved vault record.
  */
 export async function upsertVaultItem({ userId, id, encryptedData, nonce, version = 1, recordType = 'credential' }) {
-    if (id) {
-        // Step 1: Query Supabase first to check for existence and current version
-        const { data: existingData, error: fetchError } = await supabase
+    if (!id) {
+        // Create path — forward the caller-supplied record type
+        return createVaultItem({ userId, encryptedData, nonce, recordType });
+    }
+
+    // Atomic Upsert via RPC prevents unique constraint violations under high concurrency
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('atomic_upsert_vault_record', {
+        p_id: id,
+        p_user_id: userId,
+        p_encrypted_data: encryptedData,
+        p_nonce: nonce,
+        p_record_type: recordType,
+        p_client_known_version: version,
+    });
+
+    if (rpcError) {
+        throw new Error(`Error executing atomic upsert RPC: ${rpcError.message}`);
+    }
+
+    // Check RPC boolean constraint failure 
+    if (!rpcResult.success) {
+        // We know it failed due to a constraint. We can attempt to fetch the server's version
+        // to gracefully send to the frontend, although the RPC might not return it.
+        const { data: existingData } = await supabase
             .from('vault_records')
-            .select('id, version')
+            .select('version')
             .eq('id', id)
             .single();
 
-        // Step 2 (Insert): If no record is found, execute standard INSERT
-        if (fetchError && fetchError.code === 'PGRST116') {
-            const record = {
-                id: id,
-                user_id: userId,
-                encrypted_data: encryptedData,
-                nonce: nonce,
-                record_type: recordType,
-                version: version,
-                is_deleted: false,
-            };
-
-            const { data: inserted, error: insertError } = await supabase
-                .from("vault_records")
-                .insert([record])
-                .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
-                .single();
-
-            if (insertError) {
-                throw new Error(`Error inserting vault record fallback: ${insertError.message}`);
-            }
-            return inserted;
-        } else if (fetchError) {
-            // Rethrow any other fetch errors
-            throw new Error(`Error checking vault record existence: ${fetchError.message}`);
-        }
-
-        // Step 4 (Conflict): If found but versions do not match
-        if (existingData && existingData.version !== version) {
-            throw {
-                status: 409,
-                message: 'Conflict: Server has a newer version',
-                serverVersion: existingData.version
-            };
-        }
-
-        // Step 3 (Update): If found and versions match, execute RPC
-        let rpcResult;
-        try {
-            rpcResult = await updateVaultRecord({
-                id,
-                encryptedData,
-                nonce,
-                clientKnownVersion: version,
-            });
-        } catch (rpcError) {
-            throw rpcError;
-        }
-
-        // RPC returns { success, new_version, server_current_version }.
-        if (!rpcResult.success) {
-            throw {
-                status: 409,
-                message: 'Conflict: Server has a newer version',
-                serverVersion: rpcResult.server_current_version
-            };
-        }
-
-        // Re-fetch the full VaultRecord row so both create and update paths
-        // always return the same shape (consistent for controller + client cache).
-        const { data: updated, error: fetchUpdateError } = await supabase
-            .from("vault_records")
-            .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
-            .eq("id", id)
-            .single();
-
-        if (fetchUpdateError) {
-            throw new Error(`Error fetching updated vault record: ${fetchUpdateError.message}`);
-        }
-
-        return updated;
+        throw {
+            status: 409,
+            message: 'Conflict: Server has a newer version or mismatch',
+            serverVersion: existingData ? existingData.version : null
+        };
     }
 
-    // Create path — forward the caller-supplied record type
-    return createVaultItem({ userId, encryptedData, nonce, recordType });
+    // Re-fetch the full VaultRecord row to return the identical shape
+    const { data: updated, error: fetchUpdateError } = await supabase
+        .from("vault_records")
+        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+        .eq("id", id)
+        .single();
+
+    if (fetchUpdateError) {
+        throw new Error(`Error fetching updated vault record: ${fetchUpdateError.message}`);
+    }
+
+    return updated;
 }
 
 

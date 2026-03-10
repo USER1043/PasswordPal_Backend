@@ -90,7 +90,7 @@ describe('Epic 7.1 - vaultController unit tests', () => {
             body: { encrypted_data: 'enc', nonce: 'nonce', version: 2 },
         };
         const res = makeRes();
-        const err = new Error('conflict');
+        const err = new Error('Version conflict. Fetch the latest record and retry.');
         err.code = 'VERSION_CONFLICT';
         err.serverVersion = 9;
         vaultModel.upsertVaultItem.mockRejectedValue(err);
@@ -110,12 +110,16 @@ describe('Epic 7.1 - vaultController unit tests', () => {
             body: { encrypted_data: 'enc', nonce: 'nonce' },
         };
         const res = makeRes();
-        vaultModel.upsertVaultItem.mockRejectedValue(new Error('db failed'));
+        const genericError = new Error('db failed');
+        vaultModel.upsertVaultItem.mockRejectedValue(genericError);
 
         await updateVault(req, res);
 
         expect(res.status).toHaveBeenCalledWith(500);
-        expect(res.json).toHaveBeenCalledWith({ error: 'Failed to save vault item.' });
+        expect(res.json).toHaveBeenCalledWith({ 
+            error: 'db failed',
+            details: genericError 
+        });
     });
 
     it('deleteVault returns 400 when id missing', async () => {

@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "dotenvx run -- vitest run",
     "dev": "dotenvx run -- nodemon server.js",
     "start": "dotenvx run -- node server.js"
   },
