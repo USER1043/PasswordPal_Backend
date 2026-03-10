@@ -51,14 +51,17 @@ export const updateVault = async (req, res) => {
     } catch (error) {
         // Optimistic locking conflict — tell the client what the server version is
         // so it can re-pull and retry.
-        if (error.code === 'VERSION_CONFLICT') {
+        if (error.status === 409 || error.code === 'VERSION_CONFLICT') {
             return res.status(409).json({
-                error: 'Version conflict. Fetch the latest record and retry.',
+                error: error.message || 'Version conflict. Fetch the latest record and retry.',
                 server_version: error.serverVersion,
             });
         }
         console.error("Update Vault Error:", error);
-        res.status(500).json({ error: "Failed to save vault item." });
+        res.status(500).json({ 
+            error: error.message || "Failed to save vault item.",
+            details: error.details || error
+        });
     }
 };
 
