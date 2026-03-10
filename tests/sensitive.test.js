@@ -5,7 +5,6 @@ import cookieParser from 'cookie-parser';
 
 // Mock middleware
 // Mock middleware
-// Mock verifySession: Simulates a logged-in user with ID '123'
 vi.mock('../middleware/verifySession.js', () => ({
     verifySession: (req, res, next) => {
         req.user = { id: '123' };
@@ -24,6 +23,19 @@ vi.mock('../middleware/requireFreshAuth.js', () => ({
     }
 }));
 
+vi.mock('../config/db.js', () => {
+    return {
+        supabase: {
+            from: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn().mockReturnThis(),
+                delete: vi.fn().mockReturnThis(),
+                then: vi.fn().mockImplementation((resolve) => resolve({ data: [], error: null }))
+            })
+        }
+    };
+});
+
 import sensitiveRouter from '../route/sensitive.js';
 
 const app = express();
@@ -40,7 +52,7 @@ describe('Sensitive Routes', () => {
 
             // Assertions: Should succeed
             expect(res.status).toBe(200);
-            expect(res.body.message).toContain('Database exported');
+            expect(res.body.record_count).toBeDefined();
         });
 
         it('should block export when auth is not fresh', async () => {

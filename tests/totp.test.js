@@ -5,14 +5,21 @@ import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
 
+import bcrypt from 'bcryptjs';
+
 // Mock dependencies
-vi.mock('../models/mfaModel.js', () => ({
-    updateUserTotpSecret: vi.fn(),
-    getUserTotpSecret: vi.fn(),
-    disableUserTotp: vi.fn(),
-    updateUserBackupCodes: vi.fn(),
-    consumeUserBackupCode: vi.fn(),
-    getUserBackupCodes: vi.fn(),
+vi.mock('../models/mfaSettingsModel.js', () => ({
+    disableMfa: vi.fn(),
+    upsertMfaSettings: vi.fn(),
+    getMfaSettings: vi.fn(),
+}));
+
+vi.mock('../models/userModel.js', () => ({
+    getUserById: vi.fn().mockResolvedValue({ id: '123', email: 'test@example.com' }),
+}));
+
+vi.mock('../models/deviceModel.js', () => ({
+    registerUserDevice: vi.fn().mockResolvedValue({ id: 'device-1' }),
 }));
 
 vi.mock('../utils/encryption.js', () => ({
@@ -25,7 +32,7 @@ vi.mock('../utils/mfa.js', () => ({
     hashBackupCodes: (codes) => codes.map(c => `hash_${c}`)
 }));
 
-import * as db from '../models/mfaModel.js';
+import * as db from '../models/mfaSettingsModel.js';
 import totpRouter from '../route/totp.js';
 
 const app = express();
@@ -73,7 +80,7 @@ describe('TOTP Routes', () => {
                 encoding: 'base32'
             });
 
-            db.updateUserTotpSecret.mockResolvedValue(true);
+            db.upsertMfaSettings.mockResolvedValue(true);
 
             // Action: Send the code to verify and enable MFA
             const res = await request(app)
@@ -84,7 +91,11 @@ describe('TOTP Routes', () => {
             // Assertions: Should succeed and update the DB
             expect(res.status).toBe(200);
             expect(res.body.success).toBe(true);
-            expect(db.updateUserTotpSecret).toHaveBeenCalledWith('123', `encrypted_${secret.base32}`);
+            expect(db.upsertMfaSettings).toHaveBeenCalledWith(expect.objectContaining({
+                userId: '123',
+                totpSecretEnc: `encrypted_${secret.base32}`,
+                isTotpEnabled: true
+            }));
         });
 
         it('should reject invalid code', async () => {
@@ -101,7 +112,7 @@ describe('TOTP Routes', () => {
 
     describe('GET /totp/status', () => {
         it('should return totp enabled status', async () => {
-            db.getUserTotpSecret.mockResolvedValue({ totp_enabled: true });
+            db.getMfaSettings.mockResolvedValue({ is_totp_enabled: true });
 
             const res = await request(app)
                 .get('/totp/status')
@@ -119,9 +130,9 @@ describe('TOTP Routes', () => {
                 encoding: 'base32'
             });
 
-            db.getUserTotpSecret.mockResolvedValue({
-                totp_enabled: true,
-                totp_secret: `encrypted_${secret.base32}`
+            db.getMfaSettings.mockResolvedValue({
+                is_totp_enabled: true,
+                totp_secret_enc: `encrypted_${secret.base32}`
             });
 
             const res = await request(app)
@@ -136,7 +147,7 @@ describe('TOTP Routes', () => {
 
     describe('POST /totp/disable', () => {
         it('should disable totp', async () => {
-            db.disableUserTotp.mockResolvedValue(true);
+            db.disableMfa.mockResolvedValue(true);
 
             // Action: Request to turn off MFA
             const res = await request(app)
@@ -145,28 +156,32 @@ describe('TOTP Routes', () => {
 
             // Assertions: Should call the DB function to remove the secret
             expect(res.status).toBe(200);
-            expect(db.disableUserTotp).toHaveBeenCalledWith('123');
+            expect(db.disableMfa).toHaveBeenCalledWith('123');
         });
     });
 
     describe('POST /totp/backup-codes/generate', () => {
         it('should generate backup codes', async () => {
-            db.updateUserBackupCodes.mockResolvedValue(true);
+            db.upsertMfaSettings.mockResolvedValue(true);
 
             const res = await request(app)
                 .post('/totp/backup-codes/generate')
                 .set('Cookie', [`sb-access-token=${validToken}`]);
 
             expect(res.status).toBe(200);
-            expect(res.body.codes).toHaveLength(2); // Mock returns 2 codes
-            expect(db.updateUserBackupCodes).toHaveBeenCalled();
+            expect(res.body.backupCodes).toHaveLength(2); // Mock returns 2 codes
+            expect(db.upsertMfaSettings).toHaveBeenCalledWith(expect.objectContaining({ userId: '123' }));
         });
     });
 
     describe('POST /totp/backup-codes/redeem', () => {
         it('should redeem valid backup code', async () => {
-            // Setup: Mock DB saying the code was valid and consumed
-            db.consumeUserBackupCode.mockResolvedValue({ consumed: true });
+            // Setup: Mock DB with an actually hashed backup code string
+            const hashed = await bcrypt.hash('valid-code', 1);
+            db.getMfaSettings.mockResolvedValue({
+                backup_codes_enc: JSON.stringify([hashed]),
+                codes_used: 0
+            });
 
             // Action: Submit a backup code instead of TOTP
             const res = await request(app)
@@ -176,11 +191,18 @@ describe('TOTP Routes', () => {
 
             // Assertions: Should succeed
             expect(res.status).toBe(200);
-            expect(db.consumeUserBackupCode).toHaveBeenCalledWith('123', 'valid-code');
+            expect(db.upsertMfaSettings).toHaveBeenCalledWith(expect.objectContaining({ 
+                userId: '123', 
+                backupCodesEnc: '[]', 
+                codesUsed: 1 
+            }));
         });
 
         it('should reject invalid backup code', async () => {
-            db.consumeUserBackupCode.mockResolvedValue({ consumed: false });
+            const hashed = await bcrypt.hash('valid-code', 1);
+            db.getMfaSettings.mockResolvedValue({
+                backup_codes_enc: JSON.stringify([hashed])
+            });
 
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')

@@ -267,6 +267,38 @@ CREATE POLICY "Allow all for conflicts"
 -- ============================================================================
 -- STORED PROCEDURES (RPCs)
 -- ============================================================================
+CREATE OR REPLACE FUNCTION public.atomic_upsert_vault_record(
+    p_id UUID,
+    p_user_id UUID,
+    p_encrypted_data TEXT,
+    p_nonce TEXT,
+    p_record_type TEXT,
+    p_client_known_version INTEGER
+) RETURNS json AS $$
+DECLARE
+    v_new_version INTEGER;
+BEGIN
+    INSERT INTO public.vault_records (id, user_id, encrypted_data, nonce, record_type, version, updated_at)
+    VALUES (p_id, p_user_id, p_encrypted_data, p_nonce, p_record_type, p_client_known_version, NOW())
+    ON CONFLICT (id) DO UPDATE SET
+        encrypted_data = EXCLUDED.encrypted_data,
+        nonce = EXCLUDED.nonce,
+        version = public.vault_records.version + 1,
+        updated_at = NOW()
+    WHERE public.vault_records.version = EXCLUDED.version
+      AND public.vault_records.user_id = EXCLUDED.user_id
+    RETURNING version INTO v_new_version;
+
+    -- If v_new_version is null, it means the ON CONFLICT DO UPDATE WHERE condition failed.
+    -- The record exists but either version mismatched or user_id mismatched.
+    IF v_new_version IS NULL THEN
+        RETURN json_build_object('success', false);
+    END IF;
+
+    RETURN json_build_object('success', true, 'new_version', v_new_version);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION public.update_vault_record(
     p_id UUID,
     p_encrypted_data TEXT,
