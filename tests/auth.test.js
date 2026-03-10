@@ -22,9 +22,31 @@ vi.mock("../models/loginAttemptModel.js", () => ({
   countRecentFailedAttempts: vi.fn().mockResolvedValue(0),
 }));
 
-// Mock db config (though not directly used if model helpers are mocked)
+// Mock mfaSettingsModel — return null (MFA disabled) so login flows to token issuance
+vi.mock("../models/mfaSettingsModel.js", () => ({
+  getMfaSettings: vi.fn().mockResolvedValue(null),
+}));
+
+// Mock deviceModel — prevent real DB calls when registering devices on login
+vi.mock("../models/deviceModel.js", () => ({
+  registerUserDevice: vi.fn().mockResolvedValue({}),
+  updateDeviceToken: vi.fn().mockResolvedValue({}),
+  revokeDeviceByToken: vi.fn().mockResolvedValue({}),
+}));
+
+// Mock db config with a minimal supabase stub that supports chained calls
+// (used by the recovery_keys insert inside /auth/register)
+const makeChain = () => ({
+  insert: vi.fn().mockReturnThis(),
+  select: vi.fn().mockReturnThis(),
+  single: vi.fn().mockResolvedValue({ data: {}, error: null }),
+  update: vi.fn().mockReturnThis(),
+  eq: vi.fn().mockReturnThis(),
+});
 vi.mock("../config/db.js", () => ({
-  supabase: {},
+  supabase: {
+    from: vi.fn(() => makeChain()),
+  },
 }));
 
 // Import the router after mocks
@@ -53,6 +75,8 @@ describe("Auth Routes (Zero Knowledge)", () => {
         salt: "salt123",
         wrapped_mek: "mek123",
         auth_hash: "client_hash_value",
+        // 64-char hex — satisfies the Joi .hex().length(64) validation rule
+        recovery_key_hash: "a".repeat(64),
       };
 
       const res = await request(app)

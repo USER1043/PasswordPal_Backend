@@ -87,10 +87,16 @@ router.get("/params", async (req, res) => {
       return res.status(400).json({ error: "Email is required" });
     }
 
-    const user = await getUserByEmail(email);
+    let user;
+    try {
+      user = await getUserByEmail(email);
+    } catch {
+      // Supabase .single() threw PGRST116 (user not found)
+    }
+
     if (!user) {
-      // Security: To prevent enumeration, maybe return fake/random salt?
-      // For now, returning 404 is acceptable for this stage.
+      // Security: To prevent enumeration, we return 404 which the frontend
+      // standardizes to "Email or password incorrect"
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -120,12 +126,15 @@ router.post("/login", validateRequest(loginBodySchema), async (req, res) => {
       });
     }
 
-    // Get user
+    // Get user — handle both thrown errors and silent null returns
     let user;
     try {
       user = await getUserByEmail(email);
-    } catch (err) {
-      // Record failed attempt (user not found)
+    } catch {
+      // Supabase threw (PGRST116 — user not found, or DB error)
+    }
+    if (!user) {
+      // Record failed attempt (user not found or lookup failed)
       await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(e => console.error("Audit log error:", e.message));
       return res.status(401).json({ error: "Invalid credentials" });
     }
