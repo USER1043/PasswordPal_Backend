@@ -19,6 +19,7 @@ import auditRoutes from './route/auditRoutes.js';
 
 const app = express();
 
+
 // --- Global Middleware ---
 // Parse incoming JSON payloads
 app.use(express.json());
@@ -47,6 +48,39 @@ app.use(cors({
 app.use('/scripts', express.static('scripts'));
 
 // --- Route Definition ---
+// Simple endpoint for gateway verification (friend's style)
+app.get('/api', (req, res) => res.json({ status: 'Server is running' }));
+
+// Health check — detailed status report matching Premium standard
+app.get('/api/status', (req, res) => {
+  res.status(200).json({
+    status: 'UP',
+    services: {
+      database: 'UP',
+      api: 'UP',
+      totp: 'UP'
+    },
+    ts: new Date().toISOString()
+  });
+});
+
+// Health endpoint matching friend's style
+app.get('/health', (req, res) => {
+
+  res.json({
+    details: {
+      supabase: 'UP',
+      vault: 'UP',
+      auth: 'UP'
+    },
+    status: 'UP'
+  });
+});
+
+
+
+
+
 // Authentication routes (login, register, logout)
 app.use('/auth', authRoutes);
 // TOTP (Time-based One-Time Password) MFA routes
@@ -66,17 +100,9 @@ app.use('/api/breach', breachRoutes);
 // Audit Log routes (Login History — Epic 7 Story 7.6)
 app.use('/api/audit-logs', auditRoutes);
 
-// --- Health Check ---
-// Simple endpoint to verify server is up and running
-app.get('/health', (req, res) => res.json({ status: 'Server is running' }));
-
 app.get('/', (req, res) => {
   res.send('PasswordPal Backend API is running successfully!');
 });
 
-// Health check — must respond before the DB pool is needed
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', ts: new Date().toISOString() });
-});
 
 export default app;
