@@ -103,11 +103,15 @@ jobs:
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Attempt $i/$MAX_RETRIES — checking $HEALTH_URL ..."
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL")
-            if [ "$STATUS" -eq 200 ]; then
-              echo "✅ Backend is healthy (HTTP 200)"
+            
+            if [ "$STATUS" -eq 204 ]; then
+              echo "✅ Backend is healthy and connected to DB (HTTP 204)"
               exit 0
+            elif [ "$STATUS" -eq 503 ]; then
+              echo "⚠️ Backend is alive but database is unreachable (HTTP 503). Retrying..."
+            else
+              echo "  → Got HTTP $STATUS, retrying in ${SLEEP_SECONDS}s..."
             fi
-            echo "  → Got HTTP $STATUS, retrying in ${SLEEP_SECONDS}s..."
             sleep $SLEEP_SECONDS
           done
 
