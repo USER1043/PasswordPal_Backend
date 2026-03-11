@@ -16,6 +16,7 @@ import vaultRoutes from './route/vaultRoutes.js';
 import deviceRoutes from './route/deviceRoutes.js';
 import breachRoutes from './route/breachRoutes.js';
 import auditRoutes from './route/auditRoutes.js';
+import faviconRoutes from './route/faviconRoutes.js';
 
 const app = express();
 
@@ -86,6 +87,10 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/breach', breachRoutes);
 // Audit Log routes (Login History — Epic 7 Story 7.6)
 app.use('/api/audit-logs', auditRoutes);
+
+// --- Favicon Proxy ---
+// Protects user IPs from being leaked to Google when fetching favicons in the vault
+app.use('/api/favicon', faviconRoutes);
 
 // --- Health Check ---
 // Highly reliable network probe endpoint returning 204 No Content (no body)
