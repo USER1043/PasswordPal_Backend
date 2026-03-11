@@ -3,18 +3,15 @@
 // This file initializes the database connection test and starts the Express server.
 
 import app from './app.js';
-import { testConnection } from './config/db.js';
+import { startHealthCheck } from './config/db.js';
 
 // Define the port to run the server on, defaulting to 3000 if not specified in environment variables.
 const PORT = process.env.PORT || 3000;
 
 (async () => {
-  // 1. Test Database Connectivity
-  // Before starting the server, we verify we can connect to Supabase.
-  const result = await testConnection();
-  if (!result.ok) {
-    console.error('Warning: DB connectivity test failed on startup.');
-  }
+  // 1. Start Database Connectivity Polling
+  // Before starting the server, start the health check routine.
+  await startHealthCheck();
 
   // 2. Start the Server
   // Listen for incoming requests on the specified port.

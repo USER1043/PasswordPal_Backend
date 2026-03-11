@@ -46,6 +46,27 @@ app.use(cors({
 // Serve scripts directory for testing/demo purposes
 app.use('/scripts', express.static('scripts'));
 
+import { isDbConnected } from './config/db.js';
+
+// --- Database Connection Gatekeeper ---
+// If the backend loses connection to the database (e.g., when the host machine loses Wi-Fi),
+// immediately return 503 Service Unavailable for all API routes. This signals the frontend 
+// to instantly switch to Offline Mode and use the local SQLite cache instead of waiting 
+// for internal 500 errors to bubble up.
+app.use((req, res, next) => {
+  // Always permit health checks and logout
+  if (req.path === '/health' || req.originalUrl === '/health' || req.path === '/auth/logout') {
+    return next();
+  }
+  
+  if (!isDbConnected && (req.path.startsWith('/api') || req.path.startsWith('/auth'))) {
+    console.warn(`[Intercepted] 503 Database Unreachable: ${req.method} ${req.originalUrl}`);
+    return res.status(503).json({ error: "Database unreachable (Offline mode)" });
+  }
+  
+  next();
+});
+
 // --- Route Definition ---
 // Authentication routes (login, register, logout)
 app.use('/auth', authRoutes);
@@ -67,16 +88,16 @@ app.use('/api/breach', breachRoutes);
 app.use('/api/audit-logs', auditRoutes);
 
 // --- Health Check ---
-// Simple endpoint to verify server is up and running
-app.get('/health', (req, res) => res.json({ status: 'Server is running' }));
-
-app.get('/', (req, res) => {
-  res.send('PasswordPal Backend API is running!');
-});
-
-// Health check — must respond before the DB pool is needed
+// Highly reliable network probe endpoint returning 204 No Content (no body)
+// Used by Tauri desktop frontend to verify backend availability and Supabase connectivity.
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', ts: new Date().toISOString() });
+  if (isDbConnected) {
+    res.status(204).end();
+  } else {
+    // Return 503 Service Unavailable if backend cannot reach the database
+    // This allows the frontend to explicitly fall back to offline mode.
+    res.status(503).json({ error: "Database unreachable" });
+  }
 });
 
 export default app;
