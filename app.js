@@ -71,7 +71,7 @@ app.use('/api/audit-logs', auditRoutes);
 app.get('/health', (req, res) => res.json({ status: 'Server is running' }));
 
 app.get('/', (req, res) => {
-  res.send('PasswordPal Backend API is running successfully!');
+  res.send('PasswordPal Backend API is running!');
 });
 
 // Health check — must respond before the DB pool is needed
