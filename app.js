@@ -58,12 +58,12 @@ app.use((req, res, next) => {
   if (req.path === '/health' || req.originalUrl === '/health' || req.path === '/auth/logout') {
     return next();
   }
-  
+
   if (!isDbConnected && (req.path.startsWith('/api') || req.path.startsWith('/auth'))) {
     console.warn(`[Intercepted] 503 Database Unreachable: ${req.method} ${req.originalUrl}`);
     return res.status(503).json({ error: "Database unreachable (Offline mode)" });
   }
-  
+
   next();
 });
 
@@ -98,6 +98,11 @@ app.get('/health', (req, res) => {
     // This allows the frontend to explicitly fall back to offline mode.
     res.status(503).json({ error: "Database unreachable" });
   }
+});
+
+// Simple endpoint to verify server is up and running
+app.get('/', (req, res) => {
+  res.send('PasswordPal Backend API is running!');
 });
 
 export default app;
