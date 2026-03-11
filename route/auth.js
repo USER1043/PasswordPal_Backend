@@ -16,6 +16,7 @@ import {
   updateDeviceToken,
   revokeDeviceByToken,
 } from "../models/deviceModel.js";
+import { verifySession } from "../middleware/verifySession.js";
 
 const router = express.Router();
 
@@ -402,6 +403,38 @@ router.post("/recover", async (req, res) => {
     return res.status(200).json({ message: "Account recovered successfully. Please log in with your new password." });
   } catch (err) {
     console.error("Account recovery error:", err?.message || err);
+    return res.status(500).json({ error: "Internal server error", detail: err?.message });
+  }
+});
+
+// Change Master Password
+// Requires a valid active session.
+router.post("/change-password", verifySession, async (req, res) => {
+  try {
+    const { salt, wrapped_mek, auth_hash } = req.body;
+
+    if (!salt || !wrapped_mek || !auth_hash) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const userId = req.user.id;
+    const new_server_hash = await argon2.hash(auth_hash);
+
+    // Update user credentials
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({
+        salt,
+        wrapped_mek,
+        server_hash: new_server_hash,
+      })
+      .eq("id", userId);
+
+    if (updateError) throw updateError;
+
+    return res.status(200).json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("Change password error:", err?.message || err);
     return res.status(500).json({ error: "Internal server error", detail: err?.message });
   }
 });
