@@ -69,7 +69,7 @@ export async function createVaultItem({ userId, encryptedData, nonce, recordType
 
 /**
  * Update a vault record using the `update_vault_record` Supabase RPC.
- * Implements optimistic locking — the update is rejected if the server version
+ * Implements optimistic locking - the update is rejected if the server version
  * has advanced beyond the client's known version.
  *
  * @param {Object} params
@@ -161,7 +161,7 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
  */
 export async function upsertVaultItem({ userId, id, encryptedData, nonce, version = 1, recordType = 'credential' }) {
     if (!id) {
-        // Create path — forward the caller-supplied record type
+        // Create path - forward the caller-supplied record type
         return createVaultItem({ userId, encryptedData, nonce, recordType });
     }
 

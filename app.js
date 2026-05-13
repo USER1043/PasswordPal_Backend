@@ -77,15 +77,15 @@ app.use('/auth/totp', totpRoutes);
 app.use('/api', apiRoutes);
 // Sensitive action routes requiring fresh authentication
 app.use('/api', sensitiveRoutes);
-// Vault sync routes (Delta Sync API — Epic 4)
+// Vault sync routes (Delta Sync API - Epic 4)
 app.use('/api/vault', vaultSyncRoutes);
-// Vault Data routes — CRUD endpoints (Get/Update/Delete — Epic 7 Story 7.1)
+// Vault Data routes - CRUD endpoints (Get/Update/Delete - Epic 7 Story 7.1)
 app.use('/api/vault', vaultRoutes);
 // Device management routes
 app.use('/api/devices', deviceRoutes);
 // Breach Check Proxy (Epic 7 Story 7.3)
 app.use('/api/breach', breachRoutes);
-// Audit Log routes (Login History — Epic 7 Story 7.6)
+// Audit Log routes (Login History - Epic 7 Story 7.6)
 app.use('/api/audit-logs', auditRoutes);
 
 // --- Favicon Proxy ---

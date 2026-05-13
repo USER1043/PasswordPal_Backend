@@ -20,7 +20,7 @@ export async function getMfaSettings(userId) {
         .single();
 
     if (error) {
-        // PGRST116 = no rows found — not an error, just no MFA configured yet
+        // PGRST116 = no rows found - not an error, just no MFA configured yet
         if (error.code === 'PGRST116') return null;
         throw new Error(`Error fetching MFA settings: ${error.message}`);
     }

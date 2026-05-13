@@ -49,7 +49,7 @@ export const updateVault = async (req, res) => {
             item: result
         });
     } catch (error) {
-        // Optimistic locking conflict — tell the client what the server version is
+        // Optimistic locking conflict - tell the client what the server version is
         // so it can re-pull and retry.
         if (error.status === 409 || error.code === 'VERSION_CONFLICT') {
             return res.status(409).json({

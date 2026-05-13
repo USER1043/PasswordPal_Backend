@@ -5,7 +5,7 @@
 
 -- ===== PART 1: Fix mfa_settings =====
 
--- Drop the broken table (safe — MFA was never persisting anyway)
+-- Drop the broken table (safe - MFA was never persisting anyway)
 DROP TABLE IF EXISTS public.mfa_settings CASCADE;
 
 -- Recreate with correct FK to public.users (NOT auth.users)

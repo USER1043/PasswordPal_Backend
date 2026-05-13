@@ -1,6 +1,6 @@
 // validators/middleware.js
 // Reusable Express middleware for Joi schema validation.
-// Keeps controller logic clean — validation errors return 400 with Joi details.
+// Keeps controller logic clean - validation errors return 400 with Joi details.
 
 /**
  * Creates an Express middleware that validates a request property against a Joi schema.

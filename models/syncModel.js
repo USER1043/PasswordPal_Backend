@@ -49,7 +49,7 @@ export async function pullChanges(userId, sinceTimestamp, { limit = 100, offset 
 
 /**
  * Push a single vault record change via the `update_vault_record` RPC.
- * Implements optimistic locking — rejects the update if versions conflict.
+ * Implements optimistic locking - rejects the update if versions conflict.
  *
  * For new records (client_known_version === 0), performs an INSERT.
  * For existing records, calls the RPC which checks version before updating.
@@ -88,7 +88,7 @@ export async function pushRecord({ id, user_id, encrypted_data, nonce, client_kn
             .single();
 
         if (error) {
-            // Duplicate key means the record already exists — treat as conflict
+            // Duplicate key means the record already exists - treat as conflict
             if (error.code === '23505') {
                 // Fetch the existing server record for conflict resolution
                 const serverRecord = await fetchServerRecord(id);
@@ -125,7 +125,7 @@ export async function pushRecord({ id, user_id, encrypted_data, nonce, client_kn
         };
     }
 
-    // Version conflict — fetch the server's current record for client-side conflict copy
+    // Version conflict - fetch the server's current record for client-side conflict copy
     const serverRecord = await fetchServerRecord(id);
     return {
         id,

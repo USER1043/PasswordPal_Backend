@@ -94,14 +94,14 @@ jobs:
           echo "Waiting 90 seconds for Render to build and start..."
           sleep 90
 
-      - name: Health check — backend is live
+      - name: Health check - backend is live
         run: |
           MAX_RETRIES=10
           SLEEP_SECONDS=15
           HEALTH_URL="https://passwordpal-backend.onrender.com/health"
 
           for i in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $i/$MAX_RETRIES — checking $HEALTH_URL ..."
+            echo "Attempt $i/$MAX_RETRIES - checking $HEALTH_URL ..."
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL")
             
             if [ "$STATUS" -eq 204 ]; then

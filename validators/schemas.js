@@ -298,7 +298,7 @@ export const auditLogSchema = Joi.object({
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// GET /api/vault/sync — query params
+// GET /api/vault/sync - query params
 // ---------------------------------------------------------------------------
 export const pullSyncQuerySchema = Joi.object({
     since: isoDate.default(new Date(0).toISOString()),  // Defaults to epoch (full sync)
@@ -307,7 +307,7 @@ export const pullSyncQuerySchema = Joi.object({
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/vault/sync — request body
+// POST /api/vault/sync - request body
 // ---------------------------------------------------------------------------
 const pushRecordItemSchema = Joi.object({
     id: uuid.required(),
@@ -323,7 +323,7 @@ export const pushSyncBodySchema = Joi.object({
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/vault — request body (Story 7.1 vault upsert endpoint)
+// POST /api/vault - request body (Story 7.1 vault upsert endpoint)
 // ---------------------------------------------------------------------------
 export const vaultUpsertBodySchema = Joi.object({
     // Optional client-supplied record UUID. Omit to create a new record.

@@ -1,4 +1,4 @@
-# render.yaml — PasswordPal Backend
+# render.yaml - PasswordPal Backend
 # Place this file at the root of the Backend repo.
 # Render will detect it and use it for all service configuration.
 # Docs: https://render.com/docs/infrastructure-as-code
@@ -30,7 +30,7 @@ services:
       - key: PORT
         value: "3000"
 
-      # These are secret — set them in the Render dashboard, NOT here:
+      # These are secret - set them in the Render dashboard, NOT here:
       # DATABASE_URL          → postgresql://...
       # JWT_SECRET            → (random 64-char hex)
       # JWT_REFRESH_SECRET    → (random 64-char hex)

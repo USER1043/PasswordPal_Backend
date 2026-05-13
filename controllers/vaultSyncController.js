@@ -1,11 +1,11 @@
 import { pullChanges, pushRecord } from '../models/syncModel.js';
 
 // ---------------------------------------------------------------------------
-// GET /api/vault/sync — Pull Changes (Delta Sync with Pagination)
+// GET /api/vault/sync - Pull Changes (Delta Sync with Pagination)
 // ---------------------------------------------------------------------------
 // Fetches vault records modified after the `since` timestamp.
 // Supports pagination via `limit` (default 100, max 500) and `offset` (default 0).
-// If `since` is omitted, defaults to epoch (returns everything — full sync).
+// If `since` is omitted, defaults to epoch (returns everything - full sync).
 //
 // Query: ?since=2026-02-25T00:00:00.000Z&limit=100&offset=0
 // Response: { records, total_count, has_more, server_time }
@@ -28,7 +28,7 @@ export const pullSyncChanges = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------------
-// POST /api/vault/sync — Push Changes (Delta Sync with Optimistic Locking)
+// POST /api/vault/sync - Push Changes (Delta Sync with Optimistic Locking)
 // ---------------------------------------------------------------------------
 // Accepts an array of modified vault records from the client.
 // Each record is processed via the update_vault_record RPC.
@@ -61,7 +61,7 @@ export const pushSyncChanges = async (req, res) => {
                 });
                 results.push(result);
             } catch (recordErr) {
-                // Individual record failure — report it but continue processing others
+                // Individual record failure - report it but continue processing others
                 results.push({
                     id: record.id,
                     status: 'error',
