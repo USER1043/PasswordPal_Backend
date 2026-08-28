@@ -76,11 +76,22 @@ jobs:
     steps:
       - name: Trigger Render deploy hook
         run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "❌ RENDER_DEPLOY_HOOK_URL secret is not set in GitHub Repository Secrets!"
+            exit 1
+          fi
           echo "Triggering Render deployment..."
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
 
           echo "Render responded with HTTP $RESPONSE"
+
+          if [ "$RESPONSE" -eq 404 ]; then
+            echo "❌ Render Deploy Hook URL returned 404 Not Found."
+            echo "The RENDER_DEPLOY_HOOK_URL secret in GitHub may be expired, malformed, or pointing to a deleted service."
+            echo "Copy a fresh Deploy Hook URL from Render (Settings -> Deploy Hook) and update RENDER_DEPLOY_HOOK_URL in GitHub Repository Secrets."
+            exit 1
+          fi
 
           # FIX: Render returns 202 Accepted (not 200) when it queues a deploy
           if [ "$RESPONSE" -ne 200 ] && [ "$RESPONSE" -ne 201 ] && [ "$RESPONSE" -ne 202 ]; then
