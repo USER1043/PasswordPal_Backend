@@ -5,6 +5,15 @@ import cookieParser from "cookie-parser";
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 
+// Configure Argon2id with consistent security parameters (matching production)
+const argon2Options = {
+  memoryCost: 65536, // 64 MiB in KiB
+  timeCost: 3,       // 3 iterations
+  parallelism: 4,     // 4 threads
+  hashLength: 32,
+  type: argon2.argon2id,
+};
+
 // Mock dependencies
 // Mock dependencies
 // Mock dependencies: We mock the userModel functions to control their behavior during tests.
@@ -132,7 +141,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
   describe("POST /auth/login", () => {
     it("should login successfully with correct credentials", async () => {
       // Setup: Create a hashed password and a mock user object
-      const validHash = await argon2.hash("client_auth_hash");
+      const validHash = await argon2.hash("client_auth_hash", argon2Options);
       const user = {
         id: "123",
         email: "test@example.com",
@@ -155,7 +164,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
     it("should return 401 on wrong auth_hash", async () => {
       // Setup: Mock user with a known password hash
-      const validHash = await argon2.hash("client_auth_hash");
+      const validHash = await argon2.hash("client_auth_hash", argon2Options);
       const user = {
         id: "123",
         email: "test@example.com",
@@ -175,7 +184,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
   describe("POST /auth/verify-password", () => {
     it("should return 200 and fresh token on success", async () => {
-      const validHash = await argon2.hash("client_auth_hash");
+      const validHash = await argon2.hash("client_auth_hash", argon2Options);
       const user = {
         id: "123",
         email: "test@example.com",
