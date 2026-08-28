@@ -29,6 +29,14 @@ const loginBodySchema = Joi.object({
   auth_hash: Joi.string().required(),
 });
 
+const recoverBodySchema = Joi.object({
+  email: Joi.string().email().required(),
+  recovery_key_hash: Joi.string().required(), // Argon2id hash of the recovery key
+  new_salt: Joi.string().required(),
+  new_wrapped_mek: Joi.string().required(),
+  new_auth_hash: Joi.string().required(),
+});
+
 // --- Zero Knowledge Authentication Endpoints ---
 
 // 1. Register User
@@ -55,7 +63,8 @@ router.post("/verify-password", verifyPassword);
 
 // Recovery: Reset master password using the recovery key
 // The client re-wraps the existing MEK under a new password and sends new credentials.
-router.post("/recover", recover);
+// SECURITY FIX: Now receives recovery_key_hash instead of raw recovery_key
+router.post("/recover", validateRequest(recoverBodySchema), recover);
 
 // Change Master Password
 // Requires a valid active session.

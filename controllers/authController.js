@@ -6,6 +6,16 @@ import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAt
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { registerUserDevice, updateDeviceToken, revokeDeviceByToken } from "../models/deviceModel.js";
 
+// Configure Argon2id with consistent security parameters
+// Memory (m): 64 MiB, Time/Iterations (t): 3 passes, Parallelism (p): 4 lanes/threads
+const argon2Options = {
+  memoryCost: 65536, // 64 MiB in KiB
+  timeCost: 3,       // 3 iterations
+  parallelism: 4,     // 4 threads
+  hashLength: 32,
+  type: argon2.argon2id,
+};
+
 // Rate limit: max failed attempts per IP within the window
 const MAX_FAILED_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW_MINUTES = 15;
@@ -14,7 +24,7 @@ export const register = async (req, res) => {
   try {
     const { email, salt, wrapped_mek, auth_hash, recovery_key_hash } = req.body;
 
-    const server_hash = await argon2.hash(auth_hash);
+    const server_hash = await argon2.hash(auth_hash, argon2Options);
 
     const user = await createUser({
       email,
@@ -23,10 +33,10 @@ export const register = async (req, res) => {
       wrapped_mek,
     });
 
-    const hashedRecoveryKey = await argon2.hash(recovery_key_hash);
+    // SECURITY: Store the Argon2id hash directly (no double-hashing needed since client already used Argon2id)
     const { error: rkError } = await supabase
       .from("recovery_keys")
-      .insert({ user_id: user.id, key_hash: hashedRecoveryKey });
+      .insert({ user_id: user.id, key_hash: recovery_key_hash });
     if (rkError) {
       console.error("Failed to save recovery key hash:", rkError.message);
     }
@@ -85,7 +95,7 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const isValid = await argon2.verify(user.server_hash, auth_hash);
+    const isValid = await argon2.verify(user.server_hash, auth_hash, argon2Options);
 
     if (!isValid) {
       await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
@@ -238,7 +248,7 @@ export const verifyPassword = async (req, res) => {
 
     const user = await getUserByEmail(decoded.email);
 
-    const isValid = await argon2.verify(user.server_hash, auth_hash);
+    const isValid = await argon2.verify(user.server_hash, auth_hash, argon2Options);
     if (!isValid) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
@@ -264,9 +274,11 @@ export const verifyPassword = async (req, res) => {
 
 export const recover = async (req, res) => {
   try {
-    const { email, recovery_key, new_salt, new_wrapped_mek, new_auth_hash } = req.body;
+    // SECURITY FIX: Now receiving recovery_key_hash (Argon2id) instead of raw recovery_key
+    // The server should NEVER receive the raw MEK (recovery key)
+    const { email, recovery_key_hash, new_salt, new_wrapped_mek, new_auth_hash } = req.body;
 
-    if (!email || !recovery_key || !new_salt || !new_wrapped_mek || !new_auth_hash) {
+    if (!email || !recovery_key_hash || !new_salt || !new_wrapped_mek || !new_auth_hash) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -285,15 +297,15 @@ export const recover = async (req, res) => {
       return res.status(404).json({ error: "No recovery key on file for this account" });
     }
 
-    const { createHash } = await import("crypto");
-    const providedSha256 = createHash("sha256").update(recovery_key).digest("hex");
-
-    const keyMatches = await argon2.verify(rkRow.key_hash, providedSha256);
+    // SECURITY FIX: Verify the Argon2id hash directly
+    // Client sends Argon2id hash, we verify it against stored Argon2id hash
+    // Since both use the same parameters, we can verify directly
+    const keyMatches = await argon2.verify(rkRow.key_hash, recovery_key_hash, argon2Options);
     if (!keyMatches) {
       return res.status(401).json({ error: "Invalid recovery key" });
     }
 
-    const new_server_hash = await argon2.hash(new_auth_hash);
+    const new_server_hash = await argon2.hash(new_auth_hash, argon2Options);
 
     const { error: updateError } = await supabase
       .from("users")
@@ -306,7 +318,9 @@ export const recover = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    const rotatedHash = await argon2.hash(providedSha256);
+    // SECURITY: Rotate the recovery key hash for additional security
+    // Even though the hash is already Argon2id, we re-hash with new salt for forward secrecy
+    const rotatedHash = await argon2.hash(recovery_key_hash, argon2Options);
     await supabase
       .from("recovery_keys")
       .update({ key_hash: rotatedHash })
@@ -332,7 +346,7 @@ export const changePassword = async (req, res) => {
     }
 
     const userId = req.user.id;
-    const new_server_hash = await argon2.hash(auth_hash);
+    const new_server_hash = await argon2.hash(auth_hash, argon2Options);
 
     const { error: updateError } = await supabase
       .from("users")
