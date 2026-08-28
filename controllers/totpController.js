@@ -227,6 +227,8 @@ export const verifyLogin = async (req, res) => {
         message: "TOTP verification successful. Login complete.",
         authenticated: true,
         user: { id: user.id, email: user.email },
+        wrapped_mek: user.wrapped_mek,
+        salt: user.salt,
       });
     } catch (decryptErr) {
       return res.status(500).json({ error: "Failed to verify TOTP. Please try again." });
@@ -342,7 +344,43 @@ export const redeemBackup = async (req, res) => {
         codesUsed: (settings.codes_used || 0) + 1,
       });
 
-      return res.status(200).json({ success: true, message: "Backup code accepted and consumed" });
+      const user = await getUserById(userId);
+
+      const accessToken = jwt.sign(
+        { id: user.id, email: user.email },
+        process.env.JWT_SECRET,
+        { expiresIn: "15m" }
+      );
+      const refreshToken = jwt.sign(
+        { id: user.id },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.cookie("sb-access-token", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        maxAge: 15 * 60 * 1000,
+      });
+
+      res.cookie("sb-refresh-token", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      const userAgent = req.headers["user-agent"] || "Unknown Device";
+      await registerUserDevice(user.id, userAgent, refreshToken).catch(() => { });
+
+      return res.status(200).json({
+        success: true,
+        message: "Backup code accepted and consumed. Login complete.",
+        user: { id: user.id, email: user.email },
+        wrapped_mek: user.wrapped_mek,
+        salt: user.salt,
+      });
     } catch (dbErr) {
       return res.status(500).json({ error: "Failed to verify backup code. Please try again." });
     }

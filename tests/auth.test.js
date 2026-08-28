@@ -114,7 +114,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
   });
 
   describe("GET /auth/params", () => {
-    it("should return salt and wrapped_mek", async () => {
+    it("should return salt only (not wrapped_mek)", async () => {
       const user = {
         salt: "some_salt",
         wrapped_mek: "some_mek",
@@ -125,7 +125,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
         .get("/auth/params?email=test@example.com");
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual(user);
+      expect(res.body).toEqual({ salt: "some_salt" });
     });
 
     it("should return 404 if user not found", async () => {

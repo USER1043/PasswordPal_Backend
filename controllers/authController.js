@@ -68,7 +68,6 @@ export const getParams = async (req, res) => {
 
     return res.status(200).json({
       salt: user.salt,
-      wrapped_mek: user.wrapped_mek,
     });
   } catch (err) {
     return res.status(500).json({ error: "Internal server error" });
@@ -167,6 +166,8 @@ export const login = async (req, res) => {
     return res.status(200).json({
       message: "Login successful",
       user: { id: user.id, email: user.email },
+      wrapped_mek: user.wrapped_mek,
+      salt: user.salt,
       trusted_device: isTrustedDevice,
     });
 
