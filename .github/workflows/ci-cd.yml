@@ -6,11 +6,13 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - '.github/**'
   pull_request:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - '.github/**'
 
 env:
   NODE_VERSION: '24'
