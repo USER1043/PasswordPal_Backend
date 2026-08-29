@@ -20,7 +20,6 @@ import Joi from 'joi';
  * @property {number} kdf_params.m - Memory cost in KiB (e.g. 65536).
  * @property {number} kdf_params.t - Time cost / iterations (e.g. 3).
  * @property {number} kdf_params.p - Parallelism factor (e.g. 4).
- * @property {string} vault_signature - SHA-256 hash of record_id:version pairs for sync verification.
  * @property {string} created_at - ISO 8601 creation timestamp.
  * @property {string} updated_at - ISO 8601 last-update timestamp.
  */
@@ -159,7 +158,6 @@ export const userSchema = Joi.object({
         t: Joi.number().integer().default(3),
         p: Joi.number().integer().default(4),
     }).default({ algo: 'argon2id', m: 65536, t: 3, p: 4 }),
-    vault_signature: Joi.string().required().default('EMPTY_VAULT'),
     created_at: isoDate.optional(),
     updated_at: isoDate.optional(),
 });
