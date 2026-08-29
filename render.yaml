@@ -9,13 +9,14 @@ services:
     runtime: node
     region: oregon          # Change to: frankfurt | singapore | ohio as needed
     plan: starter           # free | starter | standard | pro
+    branch: main
 
     # ── Build & Start ──────────────────────────────────────────────────────
     buildCommand: npm ci
     startCommand: npm start
 
     # ── Auto-deploy ────────────────────────────────────────────────────────
-    autoDeploy: false        # Controlled by GitHub Actions deploy hook instead
+    autoDeploy: true         # Set to "After CI checks pass" in Render Dashboard Settings
 
     # ── Health Check ───────────────────────────────────────────────────────
     healthCheckPath: /health
