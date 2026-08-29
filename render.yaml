@@ -9,6 +9,7 @@ services:
     runtime: node
     region: oregon          # Change to: frankfurt | singapore | ohio as needed
     plan: starter           # free | starter | standard | pro
+    branch: main
 
     # ── Build & Start ──────────────────────────────────────────────────────
     buildCommand: npm ci
