@@ -15,7 +15,7 @@ services:
     startCommand: npm start
 
     # ── Auto-deploy ────────────────────────────────────────────────────────
-    autoDeploy: false        # Controlled by GitHub Actions deploy hook instead
+    autoDeploy: true         # Set to "After CI checks pass" in Render Dashboard Settings
 
     # ── Health Check ───────────────────────────────────────────────────────
     healthCheckPath: /health
