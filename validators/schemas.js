@@ -33,7 +33,6 @@ import Joi from 'joi';
  * @property {number} version - Optimistic locking version counter.
  * @property {boolean} is_deleted - Soft-delete flag for tombstone sync.
  * @property {string} record_type - One of 'credential', 'folder', 'tag'.
- * @property {string|null} client_record_id - Optional client-side UUID reference.
  * @property {string} created_at - ISO 8601 creation timestamp.
  * @property {string} updated_at - ISO 8601 last-update timestamp.
  */
@@ -177,7 +176,6 @@ export const vaultRecordSchema = Joi.object({
     version: Joi.number().integer().min(1).default(1),
     is_deleted: Joi.boolean().default(false),
     record_type: Joi.string().valid('credential', 'folder', 'tag').required(),
-    client_record_id: Joi.string().uuid().allow(null).optional(),
     created_at: isoDate.optional(),
     updated_at: isoDate.optional(),
 });
@@ -336,8 +334,9 @@ export const vaultUpsertBodySchema = Joi.object({
     id: uuid.optional(),
     encrypted_data: Joi.string().required(),
     nonce: Joi.string().required(),
-    // version 0 = brand-new record (client-generated UUID, no prior server version).
-    // The atomic_upsert_vault_record RPC treats p_client_known_version = 0 as a clean INSERT → version 1.
+    // The version the client last saw. 0 = brand-new record (client-generated UUID).
+    // atomic_upsert_vault_record stores a new record at the version sent (so 0), and
+    // on update only writes when this equals the stored version, then increments it.
     version: Joi.number().integer().min(0).default(0),
     // Must be one of the three allowed vault item types.
     record_type: Joi.string().valid('credential', 'folder', 'tag').default('credential'),

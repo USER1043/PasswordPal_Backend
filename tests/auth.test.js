@@ -44,6 +44,7 @@ vi.mock("../models/deviceModel.js", () => ({
   setDeviceRefreshToken: vi.fn().mockResolvedValue(),
   updateDeviceToken: vi.fn().mockResolvedValue({}),
   revokeDeviceByToken: vi.fn().mockResolvedValue({}),
+  revokeOtherDevices: vi.fn().mockResolvedValue(),
 }));
 
 const DEVICE_ID = "3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c";
@@ -67,6 +68,7 @@ vi.mock("../config/db.js", () => ({
 import router from "../route/auth.js";
 import * as db from "../models/userModel.js";
 import * as deviceModel from "../models/deviceModel.js";
+import { supabase } from "../config/db.js";
 import { recordLoginAttempt } from "../models/loginAttemptModel.js";
 
 // Pull a cookie's value out of a supertest response
@@ -183,6 +185,8 @@ describe("Auth Routes (Zero Knowledge)", () => {
       expect(deviceModel.registerUserDevice).toHaveBeenCalledWith("123", expect.any(String), DEVICE_ID);
       expect(jwt.decode(getCookie(res, "sb-access-token")).did).toBe("device-row-1");
       expect(jwt.decode(getCookie(res, "sb-refresh-token")).did).toBe("device-row-1");
+      // A login is a password proof
+      expect(Math.floor(Date.now() / 1000) - jwt.decode(getCookie(res, "sb-access-token")).auth_time).toBeLessThan(5);
       expect(deviceModel.setDeviceRefreshToken).toHaveBeenCalledWith("device-row-1", getCookie(res, "sb-refresh-token"));
       expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ wasSuccessful: true, deviceId: DEVICE_ID }));
     });
@@ -281,7 +285,10 @@ describe("Auth Routes (Zero Knowledge)", () => {
       expect(res.status).toBe(200);
       expect(res.body.fresh).toBe(true);
       // The fresh token stays bound to the same device
-      expect(jwt.decode(getCookie(res, "sb-access-token")).did).toBe("device-row-1");
+      const fresh = jwt.decode(getCookie(res, "sb-access-token"));
+      expect(fresh.did).toBe("device-row-1");
+      // ...and records that the password was proven just now
+      expect(Math.floor(Date.now() / 1000) - fresh.auth_time).toBeLessThan(5);
     });
   });
 
@@ -298,6 +305,26 @@ describe("Auth Routes (Zero Knowledge)", () => {
       expect(deviceModel.getDeviceForSession).toHaveBeenCalledWith("device-row-1", "123");
       const access = jwt.decode(getCookie(res, "sb-access-token"));
       expect(access).toMatchObject({ id: "123", email: "test@example.com", did: "device-row-1" });
+    });
+
+    it("should carry the original password-proof time through a refresh", async () => {
+      const loggedInAt = Math.floor(Date.now() / 1000) - 3600; // an hour ago
+
+      const res = await request(app)
+        .post("/auth/refresh")
+        .set("Cookie", [refreshCookie({ id: "123", email: "test@example.com", did: "device-row-1", auth_time: loggedInAt })]);
+
+      // New tokens, same auth_time - a refresh must not look like a fresh login
+      expect(jwt.decode(getCookie(res, "sb-access-token")).auth_time).toBe(loggedInAt);
+      expect(jwt.decode(getCookie(res, "sb-refresh-token")).auth_time).toBe(loggedInAt);
+    });
+
+    it("should mark sessions refreshed from a token without auth_time as never authenticated", async () => {
+      const res = await request(app)
+        .post("/auth/refresh")
+        .set("Cookie", [refreshCookie({ id: "123", email: "test@example.com", did: "device-row-1" })]);
+
+      expect(jwt.decode(getCookie(res, "sb-access-token")).auth_time).toBe(0);
     });
 
     it("should reject a refresh token that isn't bound to a device", async () => {
@@ -323,6 +350,171 @@ describe("Auth Routes (Zero Knowledge)", () => {
       expect(res.status).toBe(401);
       expect(res.body.code).toBe("SESSION_REVOKED");
       expect(deviceModel.updateDeviceToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("POST /auth/change-password", () => {
+    const sessionCookie = () =>
+      `sb-access-token=${jwt.sign({ id: "123", email: "test@example.com", did: "device-row-1" }, process.env.JWT_SECRET)}`;
+    const newCredentials = { salt: "salt", wrapped_mek: "new_mek", auth_hash: "new_auth_hash" };
+    let usersUpdate;
+
+    beforeEach(async () => {
+      const currentHash = await argon2.hash("current_auth_hash", argon2Options);
+      usersUpdate = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
+      supabase.from.mockImplementation(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: { server_hash: currentHash }, error: null }),
+        update: usersUpdate,
+      }));
+      deviceModel.revokeOtherDevices.mockResolvedValue();
+    });
+
+    it("should change the password and sign out other devices", async () => {
+      const res = await request(app)
+        .post("/auth/change-password")
+        .set("Cookie", [sessionCookie()])
+        .send({ ...newCredentials, current_auth_hash: "current_auth_hash" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.other_devices_signed_out).toBe(true);
+      const stored = usersUpdate.mock.calls[0][0];
+      expect(stored.wrapped_mek).toBe("new_mek");
+      expect(await argon2.verify(stored.server_hash, "new_auth_hash", argon2Options)).toBe(true);
+      // Every device except the one making the request
+      expect(deviceModel.revokeOtherDevices).toHaveBeenCalledWith("123", "device-row-1");
+    });
+
+    it("should reject a wrong current password and change nothing", async () => {
+      const res = await request(app)
+        .post("/auth/change-password")
+        .set("Cookie", [sessionCookie()])
+        .send({ ...newCredentials, current_auth_hash: "WRONG" });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("INVALID_CURRENT_PASSWORD");
+      expect(usersUpdate).not.toHaveBeenCalled();
+      expect(deviceModel.revokeOtherDevices).not.toHaveBeenCalled();
+    });
+
+    it("should require the current password", async () => {
+      const res = await request(app)
+        .post("/auth/change-password")
+        .set("Cookie", [sessionCookie()])
+        .send(newCredentials);
+
+      expect(res.status).toBe(400);
+      expect(usersUpdate).not.toHaveBeenCalled();
+    });
+
+    it("should reject a request without a full session", async () => {
+      const pending = jwt.sign({ id: "123", email: "test@example.com", type: "mfa-pending" }, process.env.JWT_SECRET);
+
+      const res = await request(app)
+        .post("/auth/change-password")
+        .set("Cookie", [`sb-access-token=${pending}`])
+        .send({ ...newCredentials, current_auth_hash: "current_auth_hash" });
+
+      expect(res.status).toBe(401);
+      expect(usersUpdate).not.toHaveBeenCalled();
+    });
+
+    it("should still succeed, and say so, if other devices could not be signed out", async () => {
+      deviceModel.revokeOtherDevices.mockRejectedValue(new Error("db down"));
+
+      const res = await request(app)
+        .post("/auth/change-password")
+        .set("Cookie", [sessionCookie()])
+        .send({ ...newCredentials, current_auth_hash: "current_auth_hash" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.other_devices_signed_out).toBe(false);
+    });
+  });
+
+  describe("recovery key verifier", () => {
+    const VERIFIER = "ab".repeat(32); // 64 hex chars, as the app derives it
+    // What older app builds sent: an Argon2 string with a random salt
+    const ARGON2_STRING = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHRzb21lc2FsdA$Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm8";
+
+    // Minimal supabase stub: records inserts/updates per table, returns `stored` for selects
+    const stubSupabase = (stored) => {
+      const writes = [];
+      supabase.from.mockImplementation((table) => {
+        const chain = {
+          insert: vi.fn((row) => { writes.push({ table, op: "insert", row }); return Promise.resolve({ error: null }); }),
+          update: vi.fn((row) => { writes.push({ table, op: "update", row }); return chain; }),
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          single: vi.fn().mockResolvedValue(stored ? { data: stored, error: null } : { data: null, error: { message: "none" } }),
+          then: (resolve) => resolve({ error: null }),
+        };
+        return chain;
+      });
+      return writes;
+    };
+
+    const registerBody = (recovery_key_hash) => ({
+      email: "test@example.com", salt: "salt", wrapped_mek: "mek", auth_hash: "hash", recovery_key_hash,
+    });
+    const recoverBody = (recovery_key_hash) => ({
+      email: "test@example.com", recovery_key_hash, new_salt: "s2", new_wrapped_mek: "m2", new_auth_hash: "h2",
+    });
+
+    it("register stores only an Argon2 hash of the verifier", async () => {
+      const writes = stubSupabase(null);
+      db.createUser.mockResolvedValue({ id: "123", email: "test@example.com" });
+
+      const res = await request(app).post("/auth/register").send(registerBody(VERIFIER));
+
+      expect(res.status).toBe(201);
+      const stored = writes.find((w) => w.table === "recovery_keys").row.key_hash;
+      expect(stored).not.toBe(VERIFIER);
+      expect(await argon2.verify(stored, VERIFIER, argon2Options)).toBe(true);
+    });
+
+    it("register rejects a verifier that isn't 64 hex characters", async () => {
+      const res = await request(app).post("/auth/register").send(registerBody(ARGON2_STRING));
+
+      expect(res.status).toBe(400);
+      expect(db.createUser).not.toHaveBeenCalled();
+    });
+
+    it("recover accepts the verifier that was registered", async () => {
+      const writes = stubSupabase({ key_hash: await argon2.hash(VERIFIER, argon2Options) });
+      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
+
+      const res = await request(app).post("/auth/recover").send(recoverBody(VERIFIER));
+
+      expect(res.status).toBe(200);
+      expect(writes.find((w) => w.table === "users").row.wrapped_mek).toBe("m2");
+    });
+
+    it("recover rejects a different verifier and changes nothing", async () => {
+      const writes = stubSupabase({ key_hash: await argon2.hash(VERIFIER, argon2Options) });
+      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
+
+      const res = await request(app).post("/auth/recover").send(recoverBody("cd".repeat(32)));
+
+      expect(res.status).toBe(401);
+      expect(writes).toEqual([]);
+    });
+
+    it("recover returns 401, not a server error, for an account stored under an older scheme", async () => {
+      const writes = stubSupabase({ key_hash: "ef".repeat(32) }); // not an Argon2 hash
+      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
+
+      const res = await request(app).post("/auth/recover").send(recoverBody(VERIFIER));
+
+      expect(res.status).toBe(401);
+      expect(writes).toEqual([]);
+    });
+
+    it("recover rejects a malformed verifier", async () => {
+      const res = await request(app).post("/auth/recover").send(recoverBody(ARGON2_STRING));
+
+      expect(res.status).toBe(400);
     });
   });
 });

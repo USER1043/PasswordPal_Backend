@@ -23,10 +23,15 @@ export function getClientDeviceId(req) {
 
 /**
  * Sign access + refresh tokens bound to a device row (`did` claim) and set them as cookies.
+ *
+ * `authTime` (seconds) is when the user last proved their password. It is set
+ * at login and carried unchanged through token refreshes, so a silent refresh
+ * never makes a session look recently authenticated (see requireFreshAuth).
  */
-export function setSessionCookies(res, { id, email, did }) {
-  const accessToken = jwt.sign({ id, email, did }, process.env.JWT_SECRET, { expiresIn: "15m" });
-  const refreshToken = jwt.sign({ id, email, did }, process.env.JWT_SECRET, { expiresIn: "7d" });
+export function setSessionCookies(res, { id, email, did, authTime = Math.floor(Date.now() / 1000) }) {
+  const claims = { id, email, did, auth_time: authTime };
+  const accessToken = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: "15m" });
+  const refreshToken = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: "7d" });
 
   res.cookie("sb-access-token", accessToken, cookieOptions(15 * 60 * 1000));
   res.cookie("sb-refresh-token", refreshToken, cookieOptions(7 * 24 * 60 * 60 * 1000));

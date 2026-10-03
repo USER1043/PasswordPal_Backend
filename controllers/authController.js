@@ -4,7 +4,7 @@ import { createUser, getUserByEmail } from "../models/userModel.js";
 import { supabase } from "../config/db.js";
 import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
-import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken } from "../models/deviceModel.js";
+import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices } from "../models/deviceModel.js";
 import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
 
 // Configure Argon2id with consistent security parameters
@@ -34,10 +34,13 @@ export const register = async (req, res) => {
       wrapped_mek,
     });
 
-    // SECURITY: Store the Argon2id hash directly (no double-hashing needed since client already used Argon2id)
+    // The client sends a deterministic verifier derived from the recovery key
+    // (never the key itself). Store only an Argon2id hash of it, so a database
+    // leak doesn't hand out a value that could be replayed to /auth/recover.
+    const recoveryKeyHash = await argon2.hash(recovery_key_hash, argon2Options);
     const { error: rkError } = await supabase
       .from("recovery_keys")
-      .insert({ user_id: user.id, key_hash: recovery_key_hash });
+      .insert({ user_id: user.id, key_hash: recoveryKeyHash });
     if (rkError) {
       console.error("Failed to save recovery key hash:", rkError.message);
     }
@@ -191,6 +194,8 @@ export const refresh = async (req, res) => {
       id: decoded.id,
       email: decoded.email,
       did: decoded.did,
+      // A refresh is not a password check: keep the original time (0 = never, for older tokens)
+      authTime: decoded.auth_time ?? 0,
     });
 
     await updateDeviceToken(refreshToken, newRefreshToken).catch(() => { });
@@ -236,7 +241,8 @@ export const verifyPassword = async (req, res) => {
     }
 
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email, did: decoded.did },
+      // The password was just verified, so this token counts as freshly authenticated
+      { id: user.id, email: user.email, did: decoded.did, auth_time: Math.floor(Date.now() / 1000) },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );
@@ -279,10 +285,15 @@ export const recover = async (req, res) => {
       return res.status(404).json({ error: "No recovery key on file for this account" });
     }
 
-    // SECURITY FIX: Verify the Argon2id hash directly
-    // Client sends Argon2id hash, we verify it against stored Argon2id hash
-    // Since both use the same parameters, we can verify directly
-    const keyMatches = await argon2.verify(rkRow.key_hash, recovery_key_hash, argon2Options);
+    // The client sends the same deterministic verifier it sent at registration;
+    // check it against the stored Argon2id hash. A stored value that isn't an
+    // Argon2 hash (accounts created under an older scheme) can't match.
+    let keyMatches = false;
+    try {
+      keyMatches = await argon2.verify(rkRow.key_hash, recovery_key_hash, argon2Options);
+    } catch {
+      keyMatches = false;
+    }
     if (!keyMatches) {
       return res.status(401).json({ error: "Invalid recovery key" });
     }
@@ -300,8 +311,7 @@ export const recover = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    // SECURITY: Rotate the recovery key hash for additional security
-    // Even though the hash is already Argon2id, we re-hash with new salt for forward secrecy
+    // Re-hash the verifier with a fresh salt. The recovery key itself is unchanged.
     const rotatedHash = await argon2.hash(recovery_key_hash, argon2Options);
     await supabase
       .from("recovery_keys")
@@ -321,13 +331,29 @@ export const recover = async (req, res) => {
 
 export const changePassword = async (req, res) => {
   try {
-    const { salt, wrapped_mek, auth_hash } = req.body;
+    const { salt, wrapped_mek, auth_hash, current_auth_hash } = req.body;
 
-    if (!salt || !wrapped_mek || !auth_hash) {
+    if (!salt || !wrapped_mek || !auth_hash || !current_auth_hash) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     const userId = req.user.id;
+
+    // A valid session alone is not enough to replace the master password:
+    // the caller must also prove they know the current one.
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("server_hash")
+      .eq("id", userId)
+      .single();
+
+    if (userError || !user) throw userError || new Error("User not found");
+
+    const isCurrentValid = await argon2.verify(user.server_hash, current_auth_hash, argon2Options);
+    if (!isCurrentValid) {
+      return res.status(401).json({ error: "Current password is incorrect", code: "INVALID_CURRENT_PASSWORD" });
+    }
+
     const new_server_hash = await argon2.hash(auth_hash, argon2Options);
 
     const { error: updateError } = await supabase
@@ -341,7 +367,21 @@ export const changePassword = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    return res.status(200).json({ message: "Password changed successfully" });
+    // Sign out every other device - anyone holding a session under the old
+    // password loses it. The password is already changed, so a failure here
+    // is reported rather than rolled back.
+    let otherDevicesSignedOut = true;
+    try {
+      await revokeOtherDevices(userId, req.user.did);
+    } catch (revokeErr) {
+      otherDevicesSignedOut = false;
+      console.error("Failed to revoke other devices after password change:", revokeErr);
+    }
+
+    return res.status(200).json({
+      message: "Password changed successfully",
+      other_devices_signed_out: otherDevicesSignedOut,
+    });
   } catch (err) {
     return res.status(500).json({ error: "Internal server error", detail: err?.message });
   }
