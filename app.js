@@ -18,6 +18,7 @@ import breachRoutes from './route/breachRoutes.js';
 import auditRoutes from './route/auditRoutes.js';
 import faviconRoutes from './route/faviconRoutes.js';
 import { configureTrustProxy } from './utils/clientIp.js';
+import { mountDevScripts } from './utils/devStatic.js';
 
 const app = express();
 
@@ -48,8 +49,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id']
 }));
 // --- Static Files ---
-// Serve scripts directory for testing/demo purposes
-app.use('/scripts', express.static('scripts'));
+// Serve scripts directory for local testing/demo purposes only (not in production)
+mountDevScripts(app);
 
 import { isDbConnected } from './config/db.js';
 

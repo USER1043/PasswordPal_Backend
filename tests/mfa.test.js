@@ -1,9 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { generateBackupCodes, hashBackupCodes } from '../utils/mfa.js';
 import bcrypt from 'bcryptjs';
 
 describe('MFA Utils', () => {
     describe('generateBackupCodes', () => {
+        it('should not use Math.random (predictable) to build codes', () => {
+            const spy = vi.spyOn(Math, 'random');
+            generateBackupCodes(10, 10);
+            expect(spy).not.toHaveBeenCalled();
+            spy.mockRestore();
+        });
+
         it('should generate correct number of codes with correct length', () => {
             // Setup parameters
             const count = 5;
