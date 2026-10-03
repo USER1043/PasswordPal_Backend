@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'crypto';
 
 /**
  * Generates a set of random backup codes.
@@ -14,7 +15,7 @@ export function generateBackupCodes(count = 10, length = 10) {
   for (let i = 0; i < count; i++) {
     let code = '';
     for (let j = 0; j < length; j++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+      code += chars.charAt(randomInt(chars.length));
     }
     codes.push(code);
   }
