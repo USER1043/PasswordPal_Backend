@@ -13,7 +13,7 @@ import { supabase } from "../config/db.js";
  * @param {boolean} params.wasSuccessful - Whether the login succeeded.
  * @param {string|null} [params.userAgent] - Browser/client User-Agent string.
  * @param {string|null} [params.deviceId] - Client device UUID from the X-Device-Id header.
- * @param {'invalid_credentials'|'device_blocked'|null} [params.failureReason] - Why a failed attempt was refused.
+ * @param {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|null} [params.failureReason] - Why a failed attempt was refused.
  * @returns {Promise<import('../validators/schemas.js').LoginAttempt>}
  * @throws {Error} If the database insert fails.
  */
@@ -67,7 +67,11 @@ export async function countRecentFailedAttempts(ipAddress, userId = null, window
         .select("id", { count: 'exact', head: true })
         .eq("ip_address", ipAddress)
         .eq("was_successful", false)
-        .gt("attempt_time", since);
+        .gt("attempt_time", since)
+        // A refusal for a blocked device says nothing about password guessing; counting it
+        // would let a blocked device lock out everyone behind the same IP. Rows from before
+        // failure_reason existed are NULL, and `neq` alone would drop them, so keep NULLs.
+        .or("failure_reason.is.null,failure_reason.neq.device_blocked");
 
     if (userId) {
         query = query.eq("user_id", userId);
