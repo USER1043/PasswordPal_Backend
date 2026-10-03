@@ -15,8 +15,9 @@ import { supabase } from "../config/db.js";
 export async function getVaultItemsByUserId(userId) {
     const { data, error } = await supabase
         .from("vault_records")
-        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, created_at, updated_at")
         .eq("user_id", userId)
+        .eq("is_deleted", false)
         .order("updated_at", { ascending: true });
 
     if (error) {
@@ -24,6 +25,32 @@ export async function getVaultItemsByUserId(userId) {
     }
 
     return data || [];
+}
+
+/**
+ * Retrieve a single vault record by its ID, scoped to the owning user.
+ * Returns null when the record doesn't exist or belongs to another user.
+ *
+ * @param {string} userId - UUID of the authenticated user.
+ * @param {string} recordId - UUID of the vault record.
+ * @returns {Promise<import('../validators/schemas.js').VaultRecord|null>} The record, or null.
+ * @throws {Error} If the database query fails.
+ */
+export async function getVaultItemById(userId, recordId) {
+    const { data, error } = await supabase
+        .from("vault_records")
+        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, created_at, updated_at")
+        .eq("id", recordId)
+        .eq("user_id", userId)
+        .single();
+
+    if (error) {
+        // PGRST116 = no rows found — not a hard DB error
+        if (error.code === "PGRST116") return null;
+        throw new Error(`Error fetching vault record: ${error.message}`);
+    }
+
+    return data;
 }
 
 /**
@@ -52,7 +79,6 @@ export async function createVaultItem({ userId, encryptedData, nonce, recordType
 
     // Allow client-generated UUIDs
     if (id) record.id = id;
-    if (clientRecordId) record.client_record_id = clientRecordId;
 
     const { data, error } = await supabase
         .from("vault_records")
@@ -119,6 +145,9 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
         .single();
 
     if (fetchError) {
+        if (fetchError.code === 'PGRST116') {
+            return { id, is_deleted: true };
+        }
         throw new Error(`Error fetching record for deletion: ${fetchError.message}`);
     }
 
@@ -199,7 +228,7 @@ export async function upsertVaultItem({ userId, id, encryptedData, nonce, versio
     // Re-fetch the full VaultRecord row to return the identical shape
     const { data: updated, error: fetchUpdateError } = await supabase
         .from("vault_records")
-        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, created_at, updated_at")
         .eq("id", id)
         .single();
 
@@ -228,6 +257,9 @@ export async function deleteVaultItem(userId, recordId) {
         .single();
 
     if (ownerCheckError || !record) {
+        if (ownerCheckError?.code === 'PGRST116') {
+            return { id: recordId, is_deleted: true };
+        }
         throw new Error(`Record not found or access denied.`);
     }
 

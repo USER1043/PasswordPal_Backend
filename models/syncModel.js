@@ -31,7 +31,7 @@ export async function pullChanges(userId, sinceTimestamp, { limit = 100, offset 
     // Then fetch the paginated slice
     const { data, error } = await supabase
         .from("vault_records")
-        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at")
+        .select("id, user_id, encrypted_data, nonce, version, is_deleted, record_type, created_at, updated_at")
         .eq("user_id", userId)
         .gt("updated_at", sinceTimestamp)
         .order("updated_at", { ascending: true })

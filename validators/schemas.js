@@ -328,9 +328,9 @@ export const vaultUpsertBodySchema = Joi.object({
     id: uuid.optional(),
     encrypted_data: Joi.string().required(),
     nonce: Joi.string().required(),
-    // version is used as clientKnownVersion for optimistic locking on updates.
-    // Defaults to 1 (correct for new records, caller should supply the real value on update).
-    version: Joi.number().integer().min(1).default(1),
+    // version 0 = brand-new record (client-generated UUID, no prior server version).
+    // The atomic_upsert_vault_record RPC treats p_client_known_version = 0 as a clean INSERT → version 1.
+    version: Joi.number().integer().min(0).default(0),
     // Must be one of the three allowed vault item types.
     record_type: Joi.string().valid('credential', 'folder', 'tag').default('credential'),
 });

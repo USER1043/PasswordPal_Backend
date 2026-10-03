@@ -1,4 +1,4 @@
-import { getVaultItemsByUserId, upsertVaultItem, deleteVaultItem } from "../models/vaultModel.js";
+import { getVaultItemsByUserId, getVaultItemById, upsertVaultItem, deleteVaultItem } from "../models/vaultModel.js";
 
 /**
  * GET /api/vault
@@ -17,6 +17,32 @@ export const getVault = async (req, res) => {
     } catch (error) {
         console.error("Get Vault Error:", error);
         res.status(500).json({ error: "Failed to retrieve vault data." });
+    }
+};
+
+/**
+ * GET /api/vault/:id
+ * Retrieves a single vault item by ID for the authenticated user.
+ */
+export const getVaultItem = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({ error: "Missing item ID." });
+        }
+
+        const item = await getVaultItemById(userId, id);
+
+        if (!item) {
+            return res.status(404).json({ error: "Vault item not found." });
+        }
+
+        res.json({ item });
+    } catch (error) {
+        console.error("Get Vault Item Error:", error);
+        res.status(500).json({ error: "Failed to retrieve vault item." });
     }
 };
 
