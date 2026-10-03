@@ -4,7 +4,7 @@ import { createUser, getUserByEmail } from "../models/userModel.js";
 import { supabase } from "../config/db.js";
 import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
-import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices } from "../models/deviceModel.js";
+import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices, isDeviceTrusted, clearTrustedDevices } from "../models/deviceModel.js";
 import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
 
 // Configure Argon2id with consistent security parameters
@@ -120,16 +120,10 @@ export const login = async (req, res) => {
 
     await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent, deviceId }).catch(() => { });
 
-    const trustedDeviceToken = req.cookies["sb-trusted-device"];
-    let isTrustedDevice = false;
-    if (trustedDeviceToken) {
-      try {
-        const decoded = jwt.verify(trustedDeviceToken, process.env.JWT_SECRET);
-        isTrustedDevice = decoded.id === user.id && decoded.type === "trusted-device";
-      } catch {
-        isTrustedDevice = false;
-      }
-    }
+    // Trust is stored on this device's row (see setDeviceTrusted), not in a cookie.
+    // Drop the cookie older versions set; it is no longer honoured.
+    res.clearCookie("sb-trusted-device");
+    const isTrustedDevice = isDeviceTrusted(knownDevice);
 
     const mfaSettings = await getMfaSettings(user.id);
     if (mfaSettings?.is_totp_enabled && !isTrustedDevice) {
@@ -320,7 +314,7 @@ export const recover = async (req, res) => {
 
     await supabase
       .from("user_devices")
-      .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+      .update({ is_revoked: true, revoked_at: new Date().toISOString(), trusted_until: null })
       .eq("user_id", user.id);
 
     return res.status(200).json({ message: "Account recovered successfully. Please log in with your new password." });
@@ -373,6 +367,8 @@ export const changePassword = async (req, res) => {
     let otherDevicesSignedOut = true;
     try {
       await revokeOtherDevices(userId, req.user.did);
+      // ...and the current device no longer gets to skip two-factor either
+      await clearTrustedDevices(userId);
     } catch (revokeErr) {
       otherDevicesSignedOut = false;
       console.error("Failed to revoke other devices after password change:", revokeErr);

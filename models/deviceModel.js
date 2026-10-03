@@ -15,7 +15,7 @@ export function cleanDeviceName(rawDeviceName) {
 export async function getDeviceByClientId(userId, clientDeviceId) {
   const { data, error } = await supabase
     .from("user_devices")
-    .select("id, is_revoked, is_blocked")
+    .select("id, is_revoked, is_blocked, trusted_until")
     .eq("user_id", userId)
     .eq("device_fingerprint", clientDeviceId)
     .maybeSingle();
@@ -127,7 +127,7 @@ export async function getDevicesByUserId(userId) {
 export async function revokeDeviceById(deviceId, userId) {
   const { data, error } = await supabase
     .from("user_devices")
-    .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+    .update({ is_revoked: true, revoked_at: new Date().toISOString(), trusted_until: null })
     .eq("id", deviceId)
     .eq("user_id", userId)
     .select("id");
@@ -145,7 +145,7 @@ export async function revokeDeviceById(deviceId, userId) {
 export async function revokeOtherDevices(userId, keepDeviceId) {
   const { error } = await supabase
     .from("user_devices")
-    .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+    .update({ is_revoked: true, revoked_at: new Date().toISOString(), trusted_until: null })
     .eq("user_id", userId)
     .eq("is_revoked", false)
     .neq("id", keepDeviceId);
@@ -161,7 +161,7 @@ export async function revokeOtherDevices(userId, keepDeviceId) {
 export async function setDeviceBlocked(deviceId, userId, blocked) {
   const now = new Date().toISOString();
   const changes = blocked
-    ? { is_blocked: true, blocked_at: now, is_revoked: true, revoked_at: now }
+    ? { is_blocked: true, blocked_at: now, is_revoked: true, revoked_at: now, trusted_until: null }
     : { is_blocked: false, blocked_at: null };
 
   const { data, error } = await supabase
@@ -209,4 +209,42 @@ export async function updateDeviceToken(oldToken, newToken) {
 
   if (error) throw error;
   return data;
+}
+
+/** How long "trust this device" skips two-factor on a device. */
+export const TRUSTED_DEVICE_DAYS = 30;
+
+/** True if a device row (from getDeviceByClientId) is currently trusted. */
+export function isDeviceTrusted(device) {
+  return Boolean(device?.trusted_until) && new Date(device.trusted_until).getTime() > Date.now();
+}
+
+/**
+ * Trust one device for TRUSTED_DEVICE_DAYS: logins from it skip two-factor.
+ * The trust lives on the device row, so it cannot be used from another device.
+ */
+export async function setDeviceTrusted(deviceRowId, userId) {
+  const until = new Date(Date.now() + TRUSTED_DEVICE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await supabase
+    .from("user_devices")
+    .update({ trusted_until: until })
+    .eq("id", deviceRowId)
+    .eq("user_id", userId);
+
+  if (error) throw error;
+  return until;
+}
+
+/**
+ * Cancel "trust this device" on every device of a user. Called after a password
+ * change and after account recovery, since whoever held a trusted device may
+ * be the reason the password was changed.
+ */
+export async function clearTrustedDevices(userId) {
+  const { error } = await supabase
+    .from("user_devices")
+    .update({ trusted_until: null })
+    .eq("user_id", userId);
+
+  if (error) throw error;
 }
