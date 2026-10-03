@@ -68,7 +68,8 @@ import Joi from 'joi';
 /**
  * @typedef {Object} RecoveryKey
  * @property {string} user_id - UUID of the user.
- * @property {string} key_hash - Argon2/bcrypt hash of the recovery key.
+ * @property {string|null} public_key - Raw Ed25519 public key (64 hex chars) derived from the recovery key; recovery requires a signature that verifies against it.
+ * @property {string|null} key_hash - Legacy (pre-signature recovery) hash of a replayable fingerprint; no longer read or written.
  * @property {string} created_at - ISO 8601 creation timestamp.
  * @property {string|null} expires_at - ISO 8601 expiry timestamp, null if non-expiring.
  */
@@ -217,7 +218,8 @@ export const mfaSettingSchema = Joi.object({
 // ---------------------------------------------------------------------------
 export const recoveryKeySchema = Joi.object({
     user_id: uuid.required(),
-    key_hash: Joi.string().required(),
+    public_key: Joi.string().hex().length(64).allow(null).optional(),
+    key_hash: Joi.string().allow(null).optional(),
     created_at: isoDate.optional(),
     expires_at: isoDate.allow(null).optional(),
 });

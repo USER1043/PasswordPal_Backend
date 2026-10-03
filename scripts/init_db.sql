@@ -9,7 +9,7 @@
 --   user_devices     - per-device session tracking and revocation
 --   mfa_settings     - TOTP secrets and backup codes
 --   login_attempts   - rate-limiting and brute-force detection
---   recovery_keys    - hashed recovery key for master password reset
+--   recovery_keys    - public key for signature-based master password reset
 --   refresh_tokens   - token rotation with revocation chain
 --   sync_queue       - offline operation queue per device
 --   conflicts        - sync conflict tracking and resolution
@@ -155,12 +155,26 @@ CREATE INDEX IF NOT EXISTS idx_login_failures ON public.login_attempts (ip_addre
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.recovery_keys (
     user_id     UUID        PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
-    key_hash    TEXT        NOT NULL,               -- SHA-256 hash of the 256-bit recovery key.
-                                                    -- Raw key is never sent to or stored on the server -
-                                                    -- it lives only in the user's downloaded Recovery PDF.
+    public_key  TEXT,                               -- Raw Ed25519 public key (64 hex chars) derived on the
+                                                    -- device from the recovery key. Recovery needs a signature
+                                                    -- that verifies against it. NULL for accounts created before
+                                                    -- signature-based recovery (they cannot recover).
+    key_hash    TEXT,                               -- Legacy: hash of the old replayable fingerprint. No longer
+                                                    -- read or written; kept so old rows are not lost.
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     expires_at  TIMESTAMPTZ                         -- Nullable - set if recovery keys have a TTL policy
 );
+
+-- One-time challenges the app must sign to recover an account (5 minute TTL).
+-- Only a SHA-256 of the challenge is stored. Backend-only: see the grants below.
+CREATE TABLE IF NOT EXISTS public.recovery_challenges (
+    challenge_hash TEXT        PRIMARY KEY,
+    user_id        UUID        NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_recovery_challenges_user ON public.recovery_challenges (user_id, expires_at);
 
 -- ============================================================================
 -- 7. REFRESH TOKENS
@@ -249,6 +263,7 @@ ALTER TABLE public.sync_queue      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conflicts       ENABLE ROW LEVEL SECURITY;
 -- Backend-only table: no policies, so only the service role can read or write it
 ALTER TABLE public.device_events   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recovery_challenges ENABLE ROW LEVEL SECURITY;
 
 -- Drop all existing policies to make script re-runnable
 DROP POLICY IF EXISTS "Users can see their own data"             ON public.users;
@@ -390,3 +405,4 @@ GRANT ALL ON public.users          TO service_role, authenticated, anon;
 GRANT ALL ON public.vault_records  TO service_role, authenticated, anon;
 GRANT ALL ON public.user_devices   TO service_role, authenticated, anon;
 GRANT ALL ON public.device_events  TO service_role;
+GRANT ALL ON public.recovery_challenges TO service_role;

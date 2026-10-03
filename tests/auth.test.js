@@ -104,7 +104,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
         wrapped_mek: "mek123",
         auth_hash: "client_hash_value",
         // 64-char hex - satisfies the Joi .hex().length(64) validation rule
-        recovery_key_hash: "a".repeat(64),
+        recovery_public_key: "a".repeat(64),
       };
 
       const res = await request(app)
@@ -430,91 +430,6 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.other_devices_signed_out).toBe(false);
-    });
-  });
-
-  describe("recovery key verifier", () => {
-    const VERIFIER = "ab".repeat(32); // 64 hex chars, as the app derives it
-    // What older app builds sent: an Argon2 string with a random salt
-    const ARGON2_STRING = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHRzb21lc2FsdA$Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm8";
-
-    // Minimal supabase stub: records inserts/updates per table, returns `stored` for selects
-    const stubSupabase = (stored) => {
-      const writes = [];
-      supabase.from.mockImplementation((table) => {
-        const chain = {
-          insert: vi.fn((row) => { writes.push({ table, op: "insert", row }); return Promise.resolve({ error: null }); }),
-          update: vi.fn((row) => { writes.push({ table, op: "update", row }); return chain; }),
-          select: vi.fn(() => chain),
-          eq: vi.fn(() => chain),
-          single: vi.fn().mockResolvedValue(stored ? { data: stored, error: null } : { data: null, error: { message: "none" } }),
-          then: (resolve) => resolve({ error: null }),
-        };
-        return chain;
-      });
-      return writes;
-    };
-
-    const registerBody = (recovery_key_hash) => ({
-      email: "test@example.com", salt: "salt", wrapped_mek: "mek", auth_hash: "hash", recovery_key_hash,
-    });
-    const recoverBody = (recovery_key_hash) => ({
-      email: "test@example.com", recovery_key_hash, new_salt: "s2", new_wrapped_mek: "m2", new_auth_hash: "h2",
-    });
-
-    it("register stores only an Argon2 hash of the verifier", async () => {
-      const writes = stubSupabase(null);
-      db.createUser.mockResolvedValue({ id: "123", email: "test@example.com" });
-
-      const res = await request(app).post("/auth/register").send(registerBody(VERIFIER));
-
-      expect(res.status).toBe(201);
-      const stored = writes.find((w) => w.table === "recovery_keys").row.key_hash;
-      expect(stored).not.toBe(VERIFIER);
-      expect(await argon2.verify(stored, VERIFIER, argon2Options)).toBe(true);
-    });
-
-    it("register rejects a verifier that isn't 64 hex characters", async () => {
-      const res = await request(app).post("/auth/register").send(registerBody(ARGON2_STRING));
-
-      expect(res.status).toBe(400);
-      expect(db.createUser).not.toHaveBeenCalled();
-    });
-
-    it("recover accepts the verifier that was registered", async () => {
-      const writes = stubSupabase({ key_hash: await argon2.hash(VERIFIER, argon2Options) });
-      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
-
-      const res = await request(app).post("/auth/recover").send(recoverBody(VERIFIER));
-
-      expect(res.status).toBe(200);
-      expect(writes.find((w) => w.table === "users").row.wrapped_mek).toBe("m2");
-    });
-
-    it("recover rejects a different verifier and changes nothing", async () => {
-      const writes = stubSupabase({ key_hash: await argon2.hash(VERIFIER, argon2Options) });
-      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
-
-      const res = await request(app).post("/auth/recover").send(recoverBody("cd".repeat(32)));
-
-      expect(res.status).toBe(401);
-      expect(writes).toEqual([]);
-    });
-
-    it("recover returns 401, not a server error, for an account stored under an older scheme", async () => {
-      const writes = stubSupabase({ key_hash: "ef".repeat(32) }); // not an Argon2 hash
-      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com" });
-
-      const res = await request(app).post("/auth/recover").send(recoverBody(VERIFIER));
-
-      expect(res.status).toBe(401);
-      expect(writes).toEqual([]);
-    });
-
-    it("recover rejects a malformed verifier", async () => {
-      const res = await request(app).post("/auth/recover").send(recoverBody(ARGON2_STRING));
-
-      expect(res.status).toBe(400);
     });
   });
 });
