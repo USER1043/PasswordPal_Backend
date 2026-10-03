@@ -17,8 +17,12 @@ import deviceRoutes from './route/deviceRoutes.js';
 import breachRoutes from './route/breachRoutes.js';
 import auditRoutes from './route/auditRoutes.js';
 import faviconRoutes from './route/faviconRoutes.js';
+import { configureTrustProxy } from './utils/clientIp.js';
 
 const app = express();
+
+// Resolve the real client IP (req.ip) - only our own reverse proxy is trusted
+configureTrustProxy(app);
 
 // --- Global Middleware ---
 // Parse incoming JSON payloads
@@ -41,7 +45,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id']
 }));
 // --- Static Files ---
 // Serve scripts directory for testing/demo purposes

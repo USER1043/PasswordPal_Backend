@@ -30,6 +30,11 @@ services:
         value: production
       - key: PORT
         value: "3000"
+      # Number of reverse proxies in front of the app, used to find the real
+      # client IP for login rate-limiting and the audit log. If the audit log
+      # shows a proxy address instead of your own public IP, raise this by one.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
 
       # These are secret - set them in the Render dashboard, NOT here:
       # DATABASE_URL          → postgresql://...

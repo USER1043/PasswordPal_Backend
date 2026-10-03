@@ -4,7 +4,8 @@ import { createUser, getUserByEmail } from "../models/userModel.js";
 import { supabase } from "../config/db.js";
 import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
-import { registerUserDevice, updateDeviceToken, revokeDeviceByToken } from "../models/deviceModel.js";
+import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken } from "../models/deviceModel.js";
+import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
 
 // Configure Argon2id with consistent security parameters
 // Memory (m): 64 MiB, Time/Iterations (t): 3 passes, Parallelism (p): 4 lanes/threads
@@ -77,8 +78,14 @@ export const getParams = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, auth_hash } = req.body;
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
+    // req.ip honours X-Forwarded-For only from trusted proxies (see utils/clientIp.js)
+    const clientIp = req.ip || '0.0.0.0';
     const userAgent = req.headers['user-agent'] || null;
+    const deviceId = getClientDeviceId(req);
+
+    if (!deviceId) {
+      return res.status(400).json({ error: "Missing or invalid device ID.", code: "DEVICE_ID_REQUIRED" });
+    }
 
     const recentFailures = await countRecentFailedAttempts(clientIp, null, RATE_LIMIT_WINDOW_MINUTES);
     if (recentFailures >= MAX_FAILED_ATTEMPTS) {
@@ -90,18 +97,25 @@ export const login = async (req, res) => {
       user = await getUserByEmail(email);
     } catch { }
     if (!user) {
-      await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
+      await recordLoginAttempt({ userId: null, ipAddress: clientIp, wasSuccessful: false, userAgent, deviceId, failureReason: "invalid_credentials" }).catch(() => { });
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Reject blocked devices before spending an Argon2 verify on them
+    const knownDevice = await getDeviceByClientId(user.id, deviceId);
+    if (knownDevice?.is_blocked) {
+      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent, deviceId, failureReason: "device_blocked" }).catch(() => { });
+      return res.status(403).json({ error: "This device has been blocked from this account.", code: "DEVICE_BLOCKED" });
     }
 
     const isValid = await argon2.verify(user.server_hash, auth_hash, argon2Options);
 
     if (!isValid) {
-      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent }).catch(() => { });
+      await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: false, userAgent, deviceId, failureReason: "invalid_credentials" }).catch(() => { });
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent }).catch(() => { });
+    await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent, deviceId }).catch(() => { });
 
     const trustedDeviceToken = req.cookies["sb-trusted-device"];
     let isTrustedDevice = false;
@@ -135,33 +149,10 @@ export const login = async (req, res) => {
       });
     }
 
-    const accessToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
-    );
-    const refreshToken = jwt.sign(
-      { id: user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.cookie("sb-access-token", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-      maxAge: 15 * 60 * 1000,
-    });
-
-    res.cookie("sb-refresh-token", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    const deviceName = userAgent || "Unknown Device";
-    await registerUserDevice(user.id, deviceName, refreshToken).catch(() => { });
+    const session = await issueSession(req, res, user);
+    if (!session.ok) {
+      return res.status(session.status).json(session.body);
+    }
 
     return res.status(200).json({
       message: "Login successful",
@@ -177,6 +168,12 @@ export const login = async (req, res) => {
 };
 
 export const refresh = async (req, res) => {
+  const rejectSession = () => {
+    res.clearCookie("sb-access-token");
+    res.clearCookie("sb-refresh-token");
+    return res.status(401).json({ error: "Session expired, please login again", code: "SESSION_REVOKED" });
+  };
+
   try {
     const refreshToken = req.cookies["sb-refresh-token"];
     if (!refreshToken) {
@@ -185,38 +182,22 @@ export const refresh = async (req, res) => {
 
     const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
 
-    const newAccessToken = jwt.sign(
-      { id: decoded.id },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
-    );
-    const newRefreshToken = jwt.sign(
-      { id: decoded.id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    // Refresh tokens are bound to a device row; a revoked/blocked device can't renew.
+    if (!decoded.did) return rejectSession();
+    const device = await getDeviceForSession(decoded.did, decoded.id);
+    if (!device || device.is_revoked || device.is_blocked) return rejectSession();
 
-    res.cookie("sb-access-token", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-      maxAge: 15 * 60 * 1000,
-    });
-
-    res.cookie("sb-refresh-token", newRefreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+    const { refreshToken: newRefreshToken } = setSessionCookies(res, {
+      id: decoded.id,
+      email: decoded.email,
+      did: decoded.did,
     });
 
     await updateDeviceToken(refreshToken, newRefreshToken).catch(() => { });
 
     return res.status(200).json({ message: "Token refreshed successfully" });
   } catch (err) {
-    res.clearCookie("sb-access-token");
-    res.clearCookie("sb-refresh-token");
-    return res.status(401).json({ error: "Session expired, please login again" });
+    return rejectSession();
   }
 };
 
@@ -255,7 +236,7 @@ export const verifyPassword = async (req, res) => {
     }
 
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email },
+      { id: user.id, email: user.email, did: decoded.did },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );

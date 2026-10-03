@@ -1,4 +1,6 @@
 import { supabase } from '../config/db.js';
+import { cleanDeviceName } from '../models/deviceModel.js';
+import { getDeviceEventsByUserId } from '../models/deviceEventModel.js';
 
 export const getAuditLogs = async (req, res) => {
     try {
@@ -9,7 +11,7 @@ export const getAuditLogs = async (req, res) => {
         // Paginated log entries
         const { data, error, count } = await supabase
             .from('login_attempts')
-            .select('id, ip_address, was_successful, user_agent, attempt_time', { count: 'exact' })
+            .select('id, ip_address, was_successful, failure_reason, user_agent, attempt_time', { count: 'exact' })
             .eq('user_id', userId)
             .order('attempt_time', { ascending: false })
             .range(offset, offset + limit - 1);
@@ -32,8 +34,23 @@ export const getAuditLogs = async (req, res) => {
             .eq('user_id', userId)
             .eq('was_successful', false);
 
+        // The app sends its device name ("linux/<username>") as the User-Agent.
+        // Expose that as a display name; internal device IDs never leave the server.
+        const logs = (data || []).map(({ user_agent, ...log }) => ({
+            ...log,
+            device_name: cleanDeviceName(user_agent),
+        }));
+
+        // Device management history (revoke / block / unblock). A failure here
+        // shouldn't hide the login history.
+        const deviceEvents = await getDeviceEventsByUserId(userId).catch((err) => {
+            console.error('Device events query error:', err);
+            return [];
+        });
+
         return res.status(200).json({
-            logs: data || [],
+            logs,
+            device_events: deviceEvents,
             total: count || 0,
             total_success: successCount || 0,
             total_failed: failureCount || 0,

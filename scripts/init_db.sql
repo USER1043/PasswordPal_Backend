@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS public.user_devices (
                                                     -- Persisted in Keychain/Keystore. Never changes on re-login.
     is_revoked          BOOLEAN     NOT NULL DEFAULT FALSE,
     revoked_at          TIMESTAMPTZ,                -- Nullable - set when device is explicitly revoked
+    is_blocked          BOOLEAN     NOT NULL DEFAULT FALSE, -- User blocked this device from their account.
+                                                    -- Unlike is_revoked, a re-login does not clear it.
+    blocked_at          TIMESTAMPTZ,                -- Nullable - set when device is blocked
     refresh_token       TEXT,                       -- Legacy field. refresh_tokens table is authoritative.
                                                     -- If used: store SHA-256 hash only, never raw token.
     token_expires_at    TIMESTAMPTZ NOT NULL,       -- Server-side TTL for the legacy refresh_token field
@@ -98,6 +101,11 @@ CREATE TABLE IF NOT EXISTS public.user_devices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_devices_user  ON public.user_devices (user_id);
+
+-- Per-request session check in verifySession (id + user_id -> is_revoked, is_blocked).
+-- Covering index so the lookup can be answered as an index-only scan.
+CREATE INDEX IF NOT EXISTS idx_user_devices_session
+    ON public.user_devices (id, user_id) INCLUDE (is_revoked, is_blocked);
 
 -- Partial index - only non-revoked tokens are ever looked up during auth
 CREATE INDEX IF NOT EXISTS idx_user_devices_token ON public.user_devices (refresh_token)
@@ -125,11 +133,19 @@ CREATE TABLE IF NOT EXISTS public.login_attempts (
                                                     -- not user-facing metadata. Covered under legitimate interest.
     was_successful BOOLEAN     NOT NULL DEFAULT FALSE,
     user_agent     TEXT,
+    device_id      TEXT,                            -- Client device UUID (X-Device-Id header)
+    failure_reason TEXT        CHECK (failure_reason IN ('invalid_credentials', 'device_blocked')),
+                                                    -- Why a failed attempt was refused. NULL on success.
     attempt_time   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_login_attempts_ip   ON public.login_attempts (ip_address);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON public.login_attempts (attempt_time);
+
+-- Suspicious-login tracking: attempts per device over time
+CREATE INDEX IF NOT EXISTS idx_login_attempts_device
+    ON public.login_attempts (device_id, attempt_time DESC)
+    WHERE device_id IS NOT NULL;
 
 -- Partial index for fast failed-attempt queries (rate-limit checks)
 CREATE INDEX IF NOT EXISTS idx_login_failures ON public.login_attempts (ip_address, attempt_time)
@@ -203,6 +219,24 @@ CREATE TABLE IF NOT EXISTS public.conflicts (
 CREATE INDEX IF NOT EXISTS idx_conflicts_user ON public.conflicts (user_id, record_id);
 
 -- ============================================================================
+-- 10. DEVICE EVENTS
+-- ============================================================================
+-- History of revoke / block / unblock actions, shown in the audit log.
+CREATE TABLE IF NOT EXISTS public.device_events (
+    id                 UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id            UUID        NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    action             TEXT        NOT NULL CHECK (action IN ('revoke', 'block', 'unblock')),
+    target_device_id   UUID        REFERENCES public.user_devices(id) ON DELETE SET NULL,
+    target_device_name TEXT        NOT NULL,       -- Snapshot, so history survives device deletion
+    actor_device_id    UUID        REFERENCES public.user_devices(id) ON DELETE SET NULL,
+    actor_device_name  TEXT        NOT NULL,       -- Device the action was performed from
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Audit log query pattern: a user's events, newest first
+CREATE INDEX IF NOT EXISTS idx_device_events_user ON public.device_events (user_id, created_at DESC);
+
+-- ============================================================================
 -- ROW LEVEL SECURITY
 -- ============================================================================
 ALTER TABLE public.users           ENABLE ROW LEVEL SECURITY;
@@ -214,6 +248,8 @@ ALTER TABLE public.recovery_keys   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.refresh_tokens  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sync_queue      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conflicts       ENABLE ROW LEVEL SECURITY;
+-- Backend-only table: no policies, so only the service role can read or write it
+ALTER TABLE public.device_events   ENABLE ROW LEVEL SECURITY;
 
 -- Drop all existing policies to make script re-runnable
 DROP POLICY IF EXISTS "Users can see their own data"             ON public.users;
@@ -354,3 +390,4 @@ GRANT ALL ON public.conflicts      TO service_role, authenticated, anon;
 GRANT ALL ON public.users          TO service_role, authenticated, anon;
 GRANT ALL ON public.vault_records  TO service_role, authenticated, anon;
 GRANT ALL ON public.user_devices   TO service_role, authenticated, anon;
+GRANT ALL ON public.device_events  TO service_role;

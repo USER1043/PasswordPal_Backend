@@ -1,6 +1,6 @@
 import express from 'express';
 import { verifySession } from '../middleware/verifySession.js';
-import { getDevices, revokeDevice, registerDevice } from '../controllers/deviceController.js';
+import { getDevices, revokeDevice, blockDevice, unblockDevice, registerDevice } from '../controllers/deviceController.js';
 
 const router = express.Router();
 
@@ -12,6 +12,12 @@ router.get('/', getDevices);
 
 // POST /api/devices/:id/revoke - Revoke a specific device
 router.post('/:id/revoke', revokeDevice);
+
+// POST /api/devices/:id/block - Block a device from this account (also ends its session)
+router.post('/:id/block', blockDevice);
+
+// POST /api/devices/:id/unblock - Lift a block; the device can log in again
+router.post('/:id/unblock', unblockDevice);
 
 // POST /api/devices/register - Update current session device name
 router.post('/register', registerDevice);

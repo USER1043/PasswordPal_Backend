@@ -1,23 +1,38 @@
 import { supabase } from "../config/db.js";
-import { createHash } from "crypto";
 
 /**
- * Generate a stable device fingerprint from user ID + user-agent string.
- * Server-side deterministic fallback (SHA-256 of userId:userAgent).
+ * Normalise a client-supplied device label for storage and display.
+ * Strips the "(ID: <uuid>)" suffix older clients appended to their name.
  */
-function makeFingerprint(userId, userAgent) {
-  return createHash("sha256")
-    .update(`${userId}:${userAgent || "unknown"}`)
-    .digest("hex");
+export function cleanDeviceName(rawDeviceName) {
+  return (rawDeviceName || "Unknown Device").replace(/\s*\(ID:[^)]+\)/gi, "").trim() || "Unknown Device";
 }
 
 /**
- * Register (or update) a device session.
- * Upserts on the (user_id, device_fingerprint) unique constraint so
- * re-logins from the same device update last_login instead of duplicating.
+ * Look up a user's device row by the client-generated device UUID.
+ * Used before password verification so a blocked device is rejected early.
  */
-export async function registerUserDevice(userId, deviceName, refreshToken) {
-  const fingerprint = makeFingerprint(userId, deviceName);
+export async function getDeviceByClientId(userId, clientDeviceId) {
+  const { data, error } = await supabase
+    .from("user_devices")
+    .select("id, is_revoked, is_blocked")
+    .eq("user_id", userId)
+    .eq("device_fingerprint", clientDeviceId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Register (or update) a device on login.
+ * `device_fingerprint` holds the raw client device UUID, so re-logins from the
+ * same install hit the (user_id, device_fingerprint) unique constraint and
+ * update the existing row instead of duplicating it.
+ * Never touches `is_blocked` - a re-login must not lift a block.
+ */
+export async function registerUserDevice(userId, rawDeviceName, clientDeviceId) {
+  const deviceName = cleanDeviceName(rawDeviceName);
   const tokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const now = new Date().toISOString();
 
@@ -27,13 +42,12 @@ export async function registerUserDevice(userId, deviceName, refreshToken) {
     .insert({
       user_id: userId,
       device_name: deviceName,
-      device_fingerprint: fingerprint,
-      refresh_token: refreshToken,
+      device_fingerprint: clientDeviceId,
       token_expires_at: tokenExpiresAt,
       is_revoked: false,
       last_login: now,
     })
-    .select()
+    .select("id, is_revoked, is_blocked")
     .single();
 
   // 23505 = unique_violation: device already registered, update it instead
@@ -41,18 +55,21 @@ export async function registerUserDevice(userId, deviceName, refreshToken) {
     const { data: updated, error: updateError } = await supabase
       .from("user_devices")
       .update({
-        refresh_token: refreshToken,
+        device_name: deviceName,
         token_expires_at: tokenExpiresAt,
         is_revoked: false,
+        revoked_at: null,
         last_login: now,
       })
       .eq("user_id", userId)
-      .eq("device_fingerprint", fingerprint)
-      .select()
-      .single();
+      .eq("device_fingerprint", clientDeviceId)
+      .eq("is_blocked", false)
+      .select("id, is_revoked, is_blocked")
+      .maybeSingle();
 
     if (updateError) throw updateError;
-    return updated;
+    // No row updated means the device exists but is blocked
+    return updated || getDeviceByClientId(userId, clientDeviceId);
   }
 
   if (insertError) throw insertError;
@@ -60,14 +77,43 @@ export async function registerUserDevice(userId, deviceName, refreshToken) {
 }
 
 /**
- * Get all active (non-revoked) devices for a user.
+ * Store the refresh token issued for a device session.
+ */
+export async function setDeviceRefreshToken(deviceRowId, refreshToken) {
+  const { error } = await supabase
+    .from("user_devices")
+    .update({ refresh_token: refreshToken })
+    .eq("id", deviceRowId);
+
+  if (error) throw error;
+}
+
+/**
+ * Fetch the revocation/block state of the device a session belongs to.
+ * Runs on every authenticated request (verifySession) - served by the
+ * idx_user_devices_session covering index.
+ */
+export async function getDeviceForSession(deviceRowId, userId) {
+  const { data, error } = await supabase
+    .from("user_devices")
+    .select("is_revoked, is_blocked")
+    .eq("id", deviceRowId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Get a user's active devices, plus blocked ones so they can be unblocked.
  */
 export async function getDevicesByUserId(userId) {
   const { data, error } = await supabase
     .from("user_devices")
-    .select("id, user_id, device_name, last_login, refresh_token, is_revoked")
+    .select("id, user_id, device_name, last_login, is_revoked, is_blocked, blocked_at")
     .eq("user_id", userId)
-    .eq("is_revoked", false)
+    .or("is_revoked.eq.false,is_blocked.eq.true")
     .order("last_login", { ascending: false });
 
   if (error) throw error;
@@ -76,20 +122,42 @@ export async function getDevicesByUserId(userId) {
 
 /**
  * Revoke a specific device by its ID, scoped to the user.
+ * The device can log in again; its current session ends immediately.
  */
 export async function revokeDeviceById(deviceId, userId) {
-  console.log(`[REVOKE] Attemping to revoke device ${deviceId} for user ${userId}`);
   const { data, error } = await supabase
     .from("user_devices")
     .update({ is_revoked: true, revoked_at: new Date().toISOString() })
     .eq("id", deviceId)
     .eq("user_id", userId)
-    .select();
+    .select("id");
 
-  console.log(`[REVOKE] Update result: data=${JSON.stringify(data)}, error=${error}`);
   if (error) throw error;
   if (!data || data.length === 0) {
-    console.warn(`[REVOKE] No rows updated! Either device doesn't exist or doesn't belong to the user.`);
+    throw new Error("Device not found or not owned by user");
+  }
+}
+
+/**
+ * Block or unblock a device for this user's account.
+ * Blocking also revokes the current session. Unblocking only lifts the block -
+ * the device stays signed out until it logs in again.
+ */
+export async function setDeviceBlocked(deviceId, userId, blocked) {
+  const now = new Date().toISOString();
+  const changes = blocked
+    ? { is_blocked: true, blocked_at: now, is_revoked: true, revoked_at: now }
+    : { is_blocked: false, blocked_at: null };
+
+  const { data, error } = await supabase
+    .from("user_devices")
+    .update(changes)
+    .eq("id", deviceId)
+    .eq("user_id", userId)
+    .select("id");
+
+  if (error) throw error;
+  if (!data || data.length === 0) {
     throw new Error("Device not found or not owned by user");
   }
 }

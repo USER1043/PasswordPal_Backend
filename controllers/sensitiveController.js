@@ -7,7 +7,7 @@ export const exportVaultData = async (req, res) => {
         // Fetch all vault records for this user (data is still encrypted)
         const { data: vaultRecords, error } = await supabase
             .from('vault_records')
-            .select('id, encrypted_data, nonce, version, is_deleted, record_type, client_record_id, created_at, updated_at')
+            .select('id, encrypted_data, nonce, version, is_deleted, record_type, created_at, updated_at')
             .eq('user_id', userId)
             .eq('is_deleted', false);
 

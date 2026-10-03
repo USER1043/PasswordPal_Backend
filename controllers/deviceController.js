@@ -1,24 +1,27 @@
-import { getDevicesByUserId, revokeDeviceById } from '../models/deviceModel.js';
+import { getDevicesByUserId, revokeDeviceById, setDeviceBlocked } from '../models/deviceModel.js';
+import { recordDeviceEvent } from '../models/deviceEventModel.js';
 import { supabase } from '../config/db.js';
+
+// The action has already taken effect by the time it is logged, so a logging
+// failure is reported server-side rather than failing the request.
+const logDeviceEvent = (req, action) =>
+    recordDeviceEvent({
+        userId: req.user.id,
+        action,
+        targetDeviceId: req.params.id,
+        actorDeviceId: req.user.did,
+    }).catch((err) => console.error(`Failed to record device ${action} event:`, err));
 
 export const getDevices = async (req, res) => {
     try {
         const userId = req.user.id; // injected by verifySession
-        const currentToken = req.cookies['sb-refresh-token'];
-
         const devices = await getDevicesByUserId(userId);
 
-        // Map to add `isCurrent` tag and remove sensitive attributes
-        const processedDevices = devices.map(device => {
-            const isCurrent = device.refresh_token === currentToken;
-
-            // Do not send refresh tokens back to the client
-            const { refresh_token, ...safeDevice } = device;
-            return {
-                ...safeDevice,
-                isCurrent
-            };
-        });
+        // The session's device row is carried in the token as `did`
+        const processedDevices = devices.map(device => ({
+            ...device,
+            isCurrent: device.id === req.user.did,
+        }));
 
         return res.status(200).json({ devices: processedDevices });
     } catch (err) {
@@ -33,6 +36,7 @@ export const revokeDevice = async (req, res) => {
         const deviceId = req.params.id;
 
         await revokeDeviceById(deviceId, userId);
+        await logDeviceEvent(req, "revoke");
         return res.status(200).json({ message: "Device revoked successfully" });
     } catch (err) {
         console.error("Revoke device error:", err);
@@ -40,17 +44,40 @@ export const revokeDevice = async (req, res) => {
     }
 };
 
+const setBlocked = (blocked) => async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const deviceId = req.params.id;
+
+        if (blocked && deviceId === req.user.did) {
+            return res.status(400).json({ error: "You can't block the device you're using." });
+        }
+
+        await setDeviceBlocked(deviceId, userId, blocked);
+        await logDeviceEvent(req, blocked ? "block" : "unblock");
+        return res.status(200).json({ message: blocked ? "Device blocked" : "Device unblocked" });
+    } catch (err) {
+        console.error(`${blocked ? "Block" : "Unblock"} device error:`, err);
+        if (err.message === "Device not found or not owned by user") {
+            return res.status(404).json({ error: "Device not found" });
+        }
+        return res.status(500).json({ error: `Failed to ${blocked ? "block" : "unblock"} device` });
+    }
+};
+
+export const blockDevice = setBlocked(true);
+export const unblockDevice = setBlocked(false);
+
 export const registerDevice = async (req, res) => {
     try {
         const userId = req.user.id;
-        const currentToken = req.cookies['sb-refresh-token'];
         const { name } = req.body;
 
-        if (name && currentToken) {
+        if (name) {
             await supabase
                 .from("user_devices")
                 .update({ device_name: name })
-                .eq("refresh_token", currentToken)
+                .eq("id", req.user.did)
                 .eq("user_id", userId);
         }
 

@@ -6,7 +6,7 @@ import { encryptData, decryptData } from "../utils/encryption.js";
 import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
 import bcrypt from "bcryptjs";
 import { getUserById } from "../models/userModel.js";
-import { registerUserDevice } from "../models/deviceModel.js";
+import { issueSession } from "../utils/session.js";
 
 function getUserIdFromToken(req) {
   const token = req.cookies["sb-access-token"];
@@ -194,33 +194,10 @@ export const verifyLogin = async (req, res) => {
 
       const user = await getUserById(userId);
 
-      const accessToken = jwt.sign(
-        { id: user.id, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: "15m" }
-      );
-      const refreshToken = jwt.sign(
-        { id: user.id },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      res.cookie("sb-access-token", accessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        maxAge: 15 * 60 * 1000,
-      });
-
-      res.cookie("sb-refresh-token", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      const userAgent = req.headers["user-agent"] || "Unknown Device";
-      await registerUserDevice(user.id, userAgent, refreshToken).catch(() => { });
+      const session = await issueSession(req, res, user);
+      if (!session.ok) {
+        return res.status(session.status).json(session.body);
+      }
 
       return res.status(200).json({
         success: true,
@@ -346,33 +323,10 @@ export const redeemBackup = async (req, res) => {
 
       const user = await getUserById(userId);
 
-      const accessToken = jwt.sign(
-        { id: user.id, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: "15m" }
-      );
-      const refreshToken = jwt.sign(
-        { id: user.id },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      res.cookie("sb-access-token", accessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        maxAge: 15 * 60 * 1000,
-      });
-
-      res.cookie("sb-refresh-token", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      const userAgent = req.headers["user-agent"] || "Unknown Device";
-      await registerUserDevice(user.id, userAgent, refreshToken).catch(() => { });
+      const session = await issueSession(req, res, user);
+      if (!session.ok) {
+        return res.status(session.status).json(session.body);
+      }
 
       return res.status(200).json({
         success: true,
