@@ -19,8 +19,11 @@ vi.mock('../models/userModel.js', () => ({
 }));
 
 vi.mock('../models/deviceModel.js', () => ({
-    registerUserDevice: vi.fn().mockResolvedValue({ id: 'device-1' }),
+    registerUserDevice: vi.fn().mockResolvedValue({ id: 'device-1', is_revoked: false, is_blocked: false }),
+    setDeviceRefreshToken: vi.fn().mockResolvedValue(),
 }));
+
+const DEVICE_ID = '3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c';
 
 vi.mock('../utils/encryption.js', () => ({
     encryptData: (data) => `encrypted_${data}`,
@@ -33,6 +36,7 @@ vi.mock('../utils/mfa.js', () => ({
 }));
 
 import * as db from '../models/mfaSettingsModel.js';
+import * as deviceModel from '../models/deviceModel.js';
 import totpRouter from '../route/totp.js';
 
 const app = express();
@@ -138,10 +142,31 @@ describe('TOTP Routes', () => {
             const res = await request(app)
                 .post('/totp/verify-login')
                 .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('X-Device-Id', DEVICE_ID)
                 .send({ code: validCode });
 
             expect(res.status).toBe(200);
             expect(res.body.authenticated).toBe(true);
+            expect(deviceModel.registerUserDevice).toHaveBeenCalledWith('123', expect.any(String), DEVICE_ID);
+        });
+
+        it('should not issue a session to a blocked device', async () => {
+            const validCode = speakeasy.totp({ secret: secret.base32, encoding: 'base32' });
+            db.getMfaSettings.mockResolvedValue({
+                is_totp_enabled: true,
+                totp_secret_enc: `encrypted_${secret.base32}`
+            });
+            deviceModel.registerUserDevice.mockResolvedValueOnce({ id: 'device-1', is_revoked: true, is_blocked: true });
+
+            const res = await request(app)
+                .post('/totp/verify-login')
+                .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('X-Device-Id', DEVICE_ID)
+                .send({ code: validCode });
+
+            expect(res.status).toBe(403);
+            expect(res.body.code).toBe('DEVICE_BLOCKED');
+            expect(deviceModel.setDeviceRefreshToken).not.toHaveBeenCalled();
         });
     });
 
@@ -187,6 +212,7 @@ describe('TOTP Routes', () => {
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')
                 .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('X-Device-Id', DEVICE_ID)
                 .send({ code: 'valid-code' });
 
             // Assertions: Should succeed
@@ -207,6 +233,7 @@ describe('TOTP Routes', () => {
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')
                 .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('X-Device-Id', DEVICE_ID)
                 .send({ code: 'invalid-code' });
 
             expect(res.status).toBe(401);

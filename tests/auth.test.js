@@ -38,10 +38,15 @@ vi.mock("../models/mfaSettingsModel.js", () => ({
 
 // Mock deviceModel - prevent real DB calls when registering devices on login
 vi.mock("../models/deviceModel.js", () => ({
-  registerUserDevice: vi.fn().mockResolvedValue({}),
+  getDeviceByClientId: vi.fn().mockResolvedValue(null),
+  getDeviceForSession: vi.fn().mockResolvedValue({ is_revoked: false, is_blocked: false }),
+  registerUserDevice: vi.fn().mockResolvedValue({ id: "device-row-1", is_revoked: false, is_blocked: false }),
+  setDeviceRefreshToken: vi.fn().mockResolvedValue(),
   updateDeviceToken: vi.fn().mockResolvedValue({}),
   revokeDeviceByToken: vi.fn().mockResolvedValue({}),
 }));
+
+const DEVICE_ID = "3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c";
 
 // Mock db config with a minimal supabase stub that supports chained calls
 // (used by the recovery_keys insert inside /auth/register)
@@ -61,6 +66,15 @@ vi.mock("../config/db.js", () => ({
 // Import the router after mocks
 import router from "../route/auth.js";
 import * as db from "../models/userModel.js";
+import * as deviceModel from "../models/deviceModel.js";
+import { recordLoginAttempt } from "../models/loginAttemptModel.js";
+
+// Pull a cookie's value out of a supertest response
+const getCookie = (res, name) =>
+  (res.headers["set-cookie"] || [])
+    .map((c) => c.split(";")[0])
+    .find((c) => c.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
 
 // Setup app
 const app = express();
@@ -73,6 +87,9 @@ process.env.JWT_SECRET = "test-secret";
 describe("Auth Routes (Zero Knowledge)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    deviceModel.getDeviceByClientId.mockResolvedValue(null);
+    deviceModel.getDeviceForSession.mockResolvedValue({ is_revoked: false, is_blocked: false });
+    deviceModel.registerUserDevice.mockResolvedValue({ id: "device-row-1", is_revoked: false, is_blocked: false });
   });
 
   describe("POST /auth/register", () => {
@@ -154,12 +171,65 @@ describe("Auth Routes (Zero Knowledge)", () => {
       // Action: Send a POST request to login with correct credentials
       const res = await request(app)
         .post("/auth/login")
+        .set("X-Device-Id", DEVICE_ID)
         .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
 
       // Assertions: Verify success response and cookie setting
       expect(res.status).toBe(200);
       expect(res.body.message).toBe("Login successful");
       expect(res.headers["set-cookie"]).toBeDefined(); // Should set the JWT cookie
+
+      // Device is registered under the client UUID and both tokens are bound to its row
+      expect(deviceModel.registerUserDevice).toHaveBeenCalledWith("123", expect.any(String), DEVICE_ID);
+      expect(jwt.decode(getCookie(res, "sb-access-token")).did).toBe("device-row-1");
+      expect(jwt.decode(getCookie(res, "sb-refresh-token")).did).toBe("device-row-1");
+      expect(deviceModel.setDeviceRefreshToken).toHaveBeenCalledWith("device-row-1", getCookie(res, "sb-refresh-token"));
+      expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ wasSuccessful: true, deviceId: DEVICE_ID }));
+    });
+
+    it("should return 400 when the device ID header is missing or malformed", async () => {
+      const missing = await request(app)
+        .post("/auth/login")
+        .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
+      const malformed = await request(app)
+        .post("/auth/login")
+        .set("X-Device-Id", "not-a-uuid")
+        .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
+
+      expect(missing.status).toBe(400);
+      expect(missing.body.code).toBe("DEVICE_ID_REQUIRED");
+      expect(malformed.status).toBe(400);
+      expect(db.getUserByEmail).not.toHaveBeenCalled();
+    });
+
+    it("should return 403 for a blocked device before checking the password", async () => {
+      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com", server_hash: "unused" });
+      deviceModel.getDeviceByClientId.mockResolvedValue({ id: "device-row-1", is_revoked: true, is_blocked: true });
+
+      const res = await request(app)
+        .post("/auth/login")
+        .set("X-Device-Id", DEVICE_ID)
+        .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("DEVICE_BLOCKED");
+      expect(res.headers["set-cookie"]).toBeUndefined();
+      expect(deviceModel.registerUserDevice).not.toHaveBeenCalled();
+      expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ wasSuccessful: false, deviceId: DEVICE_ID, failureReason: "device_blocked" }));
+    });
+
+    it("should allow a revoked (not blocked) device to log in again", async () => {
+      const validHash = await argon2.hash("client_auth_hash", argon2Options);
+      db.getUserByEmail.mockResolvedValue({ id: "123", email: "test@example.com", server_hash: validHash });
+      deviceModel.getDeviceByClientId.mockResolvedValue({ id: "device-row-1", is_revoked: true, is_blocked: false });
+
+      const res = await request(app)
+        .post("/auth/login")
+        .set("X-Device-Id", DEVICE_ID)
+        .send({ email: "test@example.com", auth_hash: "client_auth_hash" });
+
+      expect(res.status).toBe(200);
+      expect(deviceModel.registerUserDevice).toHaveBeenCalled();
     });
 
     it("should return 401 on wrong auth_hash", async () => {
@@ -175,10 +245,12 @@ describe("Auth Routes (Zero Knowledge)", () => {
       // Action: Attempt login with WRONG password
       const res = await request(app)
         .post("/auth/login")
+        .set("X-Device-Id", DEVICE_ID)
         .send({ email: "test@example.com", auth_hash: "WRONG_HASH" });
 
       // Assertions: Verify 401 Unauthorized and that we tracked the failed attempt
       expect(res.status).toBe(401);
+      expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ wasSuccessful: false, failureReason: "invalid_credentials" }));
     });
   });
 
@@ -193,7 +265,7 @@ describe("Auth Routes (Zero Knowledge)", () => {
 
       // Create a fake JWT token to simulate logged-in state
       const token = jwt.sign(
-        { email: "test@example.com" },
+        { email: "test@example.com", did: "device-row-1" },
         process.env.JWT_SECRET,
       );
 
@@ -208,6 +280,49 @@ describe("Auth Routes (Zero Knowledge)", () => {
       // Assertions: Should return success and indicate session is now 'fresh'
       expect(res.status).toBe(200);
       expect(res.body.fresh).toBe(true);
+      // The fresh token stays bound to the same device
+      expect(jwt.decode(getCookie(res, "sb-access-token")).did).toBe("device-row-1");
+    });
+  });
+
+  describe("POST /auth/refresh", () => {
+    const refreshCookie = (claims) =>
+      `sb-refresh-token=${jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: "7d" })}`;
+
+    it("should rotate tokens and keep the device binding", async () => {
+      const res = await request(app)
+        .post("/auth/refresh")
+        .set("Cookie", [refreshCookie({ id: "123", email: "test@example.com", did: "device-row-1" })]);
+
+      expect(res.status).toBe(200);
+      expect(deviceModel.getDeviceForSession).toHaveBeenCalledWith("device-row-1", "123");
+      const access = jwt.decode(getCookie(res, "sb-access-token"));
+      expect(access).toMatchObject({ id: "123", email: "test@example.com", did: "device-row-1" });
+    });
+
+    it("should reject a refresh token that isn't bound to a device", async () => {
+      const res = await request(app)
+        .post("/auth/refresh")
+        .set("Cookie", [refreshCookie({ id: "123" })]);
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("SESSION_REVOKED");
+    });
+
+    it.each([
+      ["revoked", { is_revoked: true, is_blocked: false }],
+      ["blocked", { is_revoked: true, is_blocked: true }],
+      ["deleted", null],
+    ])("should reject a refresh from a %s device", async (_label, deviceRow) => {
+      deviceModel.getDeviceForSession.mockResolvedValue(deviceRow);
+
+      const res = await request(app)
+        .post("/auth/refresh")
+        .set("Cookie", [refreshCookie({ id: "123", email: "test@example.com", did: "device-row-1" })]);
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("SESSION_REVOKED");
+      expect(deviceModel.updateDeviceToken).not.toHaveBeenCalled();
     });
   });
 });

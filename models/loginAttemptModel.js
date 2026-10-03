@@ -12,15 +12,19 @@ import { supabase } from "../config/db.js";
  * @param {string} params.ipAddress - IP address of the attempt.
  * @param {boolean} params.wasSuccessful - Whether the login succeeded.
  * @param {string|null} [params.userAgent] - Browser/client User-Agent string.
+ * @param {string|null} [params.deviceId] - Client device UUID from the X-Device-Id header.
+ * @param {'invalid_credentials'|'device_blocked'|null} [params.failureReason] - Why a failed attempt was refused.
  * @returns {Promise<import('../validators/schemas.js').LoginAttempt>}
  * @throws {Error} If the database insert fails.
  */
-export async function recordLoginAttempt({ userId, ipAddress, wasSuccessful, userAgent = null }) {
+export async function recordLoginAttempt({ userId, ipAddress, wasSuccessful, userAgent = null, deviceId = null, failureReason = null }) {
     const payload = {
         user_id: userId,
         ip_address: ipAddress,
         was_successful: wasSuccessful,
         user_agent: userAgent,
+        device_id: deviceId,
+        failure_reason: wasSuccessful ? null : failureReason,
     };
 
     let { data, error } = await supabase

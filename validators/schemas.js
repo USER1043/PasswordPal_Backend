@@ -43,11 +43,13 @@ import Joi from 'joi';
  * @property {string} id - UUID primary key.
  * @property {string} user_id - UUID of the owning user.
  * @property {string} device_name - Human-readable device name.
- * @property {string} device_fingerprint - Unique device fingerprint hash.
+ * @property {string} device_fingerprint - Client-generated per-install device UUID (X-Device-Id).
  * @property {string} last_login - ISO 8601 timestamp of last login from this device.
  * @property {string|null} refresh_token - Hashed or encrypted refresh token.
  * @property {boolean} is_revoked - Whether the device session has been revoked.
  * @property {string|null} revoked_at - ISO 8601 timestamp of revocation.
+ * @property {boolean} is_blocked - Whether the user has blocked this device from their account.
+ * @property {string|null} blocked_at - ISO 8601 timestamp of the block.
  * @property {string} token_expires_at - ISO 8601 timestamp when the device token expires.
  * @property {string|null} last_country - Country code from the last login IP geolocation.
  * @property {string} created_at - ISO 8601 creation timestamp.
@@ -92,6 +94,8 @@ import Joi from 'joi';
  * @property {string} attempt_time - ISO 8601 timestamp of the attempt.
  * @property {boolean} was_successful - Whether the login attempt succeeded.
  * @property {string|null} user_agent - Browser/client User-Agent string.
+ * @property {string|null} device_id - Client device UUID (X-Device-Id) the attempt came from.
+ * @property {'invalid_credentials'|'device_blocked'|null} failure_reason - Why a failed attempt was refused.
  */
 
 /**
@@ -190,6 +194,8 @@ export const userDeviceSchema = Joi.object({
     refresh_token: Joi.string().allow(null).optional(),
     is_revoked: Joi.boolean().default(false),
     revoked_at: isoDate.allow(null).optional(),
+    is_blocked: Joi.boolean().default(false),
+    blocked_at: isoDate.allow(null).optional(),
     token_expires_at: isoDate.required(),
     last_country: Joi.string().allow(null).optional(),
     created_at: isoDate.optional(),
@@ -242,6 +248,8 @@ export const loginAttemptSchema = Joi.object({
     attempt_time: isoDate.optional(),
     was_successful: Joi.boolean().required(),
     user_agent: Joi.string().allow(null).optional(),
+    device_id: Joi.string().allow(null).optional(),
+    failure_reason: Joi.string().valid('invalid_credentials', 'device_blocked').allow(null).optional(),
 });
 
 // ---------------------------------------------------------------------------
