@@ -21,6 +21,7 @@ vi.mock('../models/userModel.js', () => ({
 vi.mock('../models/deviceModel.js', () => ({
     registerUserDevice: vi.fn().mockResolvedValue({ id: 'device-1', is_revoked: false, is_blocked: false }),
     setDeviceRefreshToken: vi.fn().mockResolvedValue(),
+    getDeviceForSession: vi.fn(),
 }));
 
 const DEVICE_ID = '3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c';
@@ -48,11 +49,16 @@ process.env.JWT_SECRET = 'test-secret';
 
 describe('TOTP Routes', () => {
     let validToken;
+    let pendingToken;
     let secret;
 
     beforeEach(() => {
         vi.clearAllMocks();
-        validToken = jwt.sign({ id: '123', email: 'test@example.com' }, process.env.JWT_SECRET);
+        // Full session, bound to a device row
+        validToken = jwt.sign({ id: '123', email: 'test@example.com', did: 'device-1' }, process.env.JWT_SECRET);
+        // Issued after the password step of an MFA login - not yet a session
+        pendingToken = jwt.sign({ id: '123', email: 'test@example.com', type: 'mfa-pending' }, process.env.JWT_SECRET);
+        deviceModel.getDeviceForSession.mockResolvedValue({ is_revoked: false, is_blocked: false });
         secret = speakeasy.generateSecret({ length: 20 });
     });
 
@@ -141,7 +147,7 @@ describe('TOTP Routes', () => {
 
             const res = await request(app)
                 .post('/totp/verify-login')
-                .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('Cookie', [`sb-access-token=${pendingToken}`])
                 .set('X-Device-Id', DEVICE_ID)
                 .send({ code: validCode });
 
@@ -160,7 +166,7 @@ describe('TOTP Routes', () => {
 
             const res = await request(app)
                 .post('/totp/verify-login')
-                .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('Cookie', [`sb-access-token=${pendingToken}`])
                 .set('X-Device-Id', DEVICE_ID)
                 .send({ code: validCode });
 
@@ -211,7 +217,7 @@ describe('TOTP Routes', () => {
             // Action: Submit a backup code instead of TOTP
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')
-                .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('Cookie', [`sb-access-token=${pendingToken}`])
                 .set('X-Device-Id', DEVICE_ID)
                 .send({ code: 'valid-code' });
 
@@ -232,11 +238,44 @@ describe('TOTP Routes', () => {
 
             const res = await request(app)
                 .post('/totp/backup-codes/redeem')
-                .set('Cookie', [`sb-access-token=${validToken}`])
+                .set('Cookie', [`sb-access-token=${pendingToken}`])
                 .set('X-Device-Id', DEVICE_ID)
                 .send({ code: 'invalid-code' });
 
             expect(res.status).toBe(401);
+        });
+    });
+
+    describe('MFA management requires a full session', () => {
+        const managementRoutes = [
+            ['post', '/totp/setup'],
+            ['post', '/totp/verify-setup'],
+            ['get', '/totp/status'],
+            ['post', '/totp/disable'],
+            ['post', '/totp/backup-codes/generate'],
+        ];
+
+        it.each(managementRoutes)('%s %s rejects the MFA-pending token', async (method, path) => {
+            const res = await request(app)[method](path)
+                .set('Cookie', [`sb-access-token=${pendingToken}`])
+                .send({ code: '123456' });
+
+            expect(res.status).toBe(401);
+            expect(db.disableMfa).not.toHaveBeenCalled();
+            expect(db.upsertMfaSettings).not.toHaveBeenCalled();
+        });
+
+        it.each(managementRoutes)('%s %s rejects a revoked device', async (method, path) => {
+            deviceModel.getDeviceForSession.mockResolvedValue({ is_revoked: true, is_blocked: false });
+
+            const res = await request(app)[method](path)
+                .set('Cookie', [`sb-access-token=${validToken}`])
+                .send({ code: '123456' });
+
+            expect(res.status).toBe(401);
+            expect(res.body.code).toBe('SESSION_REVOKED');
+            expect(db.disableMfa).not.toHaveBeenCalled();
+            expect(db.upsertMfaSettings).not.toHaveBeenCalled();
         });
     });
 });

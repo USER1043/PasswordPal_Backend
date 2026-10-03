@@ -16,12 +16,16 @@ import {
 const router = express.Router();
 
 // --- Validation Schemas (request-level) ---
+
+// Deterministic verifier the client derives from the recovery key (BLAKE3, hex).
+// The same value is sent at registration and at recovery; the raw key never is.
+const recoveryVerifier = Joi.string().hex().length(64);
 const registerBodySchema = Joi.object({
   email: Joi.string().email().required(),
   salt: Joi.string().required(),
   wrapped_mek: Joi.string().required(),
   auth_hash: Joi.string().required(),
-  recovery_key_hash: Joi.string().hex().length(64).required(), // SHA-256 hex of the recovery key
+  recovery_key_hash: recoveryVerifier.required(),
 });
 
 const loginBodySchema = Joi.object({
@@ -31,7 +35,7 @@ const loginBodySchema = Joi.object({
 
 const recoverBodySchema = Joi.object({
   email: Joi.string().email().required(),
-  recovery_key_hash: Joi.string().required(), // Argon2id hash of the recovery key
+  recovery_key_hash: recoveryVerifier.required(),
   new_salt: Joi.string().required(),
   new_wrapped_mek: Joi.string().required(),
   new_auth_hash: Joi.string().required(),

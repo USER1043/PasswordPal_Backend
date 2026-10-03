@@ -139,6 +139,21 @@ export async function revokeDeviceById(deviceId, userId) {
 }
 
 /**
+ * Revoke every active device of a user except one (the session making the
+ * request). Used after a master password change.
+ */
+export async function revokeOtherDevices(userId, keepDeviceId) {
+  const { error } = await supabase
+    .from("user_devices")
+    .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("is_revoked", false)
+    .neq("id", keepDeviceId);
+
+  if (error) throw error;
+}
+
+/**
  * Block or unblock a device for this user's account.
  * Blocking also revokes the current session. Unblocking only lifts the block -
  * the device stays signed out until it logs in again.
