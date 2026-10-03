@@ -59,12 +59,11 @@ CREATE TABLE IF NOT EXISTS public.vault_records (
     user_id          UUID        NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     encrypted_data   TEXT        NOT NULL,          -- Base64 AES-256-GCM encrypted JSON blob
     nonce            TEXT        NOT NULL,          -- Base64 IV for AES-GCM (unique per record per write)
-    version          INTEGER     NOT NULL DEFAULT 1, -- Per-record optimistic-lock counter, incremented on every update
+    version          INTEGER     NOT NULL DEFAULT 1, -- Per-record optimistic-lock counter, incremented on every update.
+                                                    -- Records created through atomic_upsert_vault_record start at 0.
     is_deleted       BOOLEAN     NOT NULL DEFAULT FALSE, -- Soft-delete tombstone - never hard delete for sync correctness
     record_type      TEXT        NOT NULL DEFAULT 'credential'
                                  CHECK (record_type IN ('credential', 'folder', 'tag')),
-    client_record_id UUID,                          -- Client-assigned UUID for offline-created records,
-                                                    -- used for deduplication on first sync
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

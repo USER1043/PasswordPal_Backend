@@ -63,11 +63,10 @@ export async function getVaultItemById(userId, recordId) {
  * @param {string} params.nonce - Base64 encoded IV for AES-GCM.
  * @param {string} params.recordType - One of 'credential', 'folder', 'tag'.
  * @param {string} [params.id] - Optional client-generated UUID for the record.
- * @param {string} [params.clientRecordId] - Optional client-side reference UUID.
  * @returns {Promise<import('../validators/schemas.js').VaultRecord>} The created vault record.
  * @throws {Error} If the database insert fails.
  */
-export async function createVaultItem({ userId, encryptedData, nonce, recordType, id, clientRecordId }) {
+export async function createVaultItem({ userId, encryptedData, nonce, recordType, id }) {
     const record = {
         user_id: userId,
         encrypted_data: encryptedData,
@@ -184,7 +183,8 @@ export async function deleteVaultRecord({ id, clientKnownVersion }) {
  * @param {string} [params.id] - ID of the record to update (omit to create).
  * @param {string} params.encryptedData - The encrypted content.
  * @param {string} params.nonce - The encryption nonce.
- * @param {number} [params.version=1] - Version number used as clientKnownVersion on update.
+ * @param {number} [params.version=1] - The version the client last saw (0 for a brand-new record).
+ *   The RPC only writes when this equals the stored version.
  * @param {string} [params.recordType='credential'] - Vault item type: 'credential' | 'folder' | 'tag'.
  * @returns {Promise<object>} The saved vault record.
  */
