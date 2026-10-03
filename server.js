@@ -4,9 +4,15 @@
 
 import app from './app.js';
 import { startHealthCheck } from './config/db.js';
+import { getEncryptionKey } from './utils/encryption.js';
 
 // Define the port to run the server on, defaulting to 3000 if not specified in environment variables.
 const PORT = process.env.PORT || 3000;
+
+// Production must not start without an encryption key (TOTP secrets depend on it).
+if (process.env.NODE_ENV === 'production') {
+  getEncryptionKey();
+}
 
 (async () => {
   // 1. Start Database Connectivity Polling

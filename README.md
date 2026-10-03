@@ -57,6 +57,8 @@ A secure, zero-knowledge backend API for the PasswordPal password manager, built
     
     # Security Secrets
     JWT_SECRET=your_super_secret_jwt_key
+    # Encrypts TOTP secrets at rest. Required (no default). Generate with: openssl rand -hex 32
+    ENCRYPTION_KEY=your_random_64_char_hex_key
     ```
 
 4.  **Database Initialization:**

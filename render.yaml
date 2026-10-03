@@ -40,6 +40,8 @@ services:
       # DATABASE_URL          → postgresql://...
       # JWT_SECRET            → (random 64-char hex)
       # JWT_REFRESH_SECRET    → (random 64-char hex)
+      # ENCRYPTION_KEY       → (random 64-char hex: openssl rand -hex 32; required, the server
+      #                          will not start in production without it)
       # SESSION_SECRET        → (random 64-char hex)
       # SUPABASE_URL          → https://<project>.supabase.co
       # SUPABASE_KEY          → <service-role key>
