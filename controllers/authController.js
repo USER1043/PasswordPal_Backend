@@ -2,10 +2,11 @@ import jwt from "jsonwebtoken";
 import argon2 from "argon2";
 import { createUser, getUserByEmail } from "../models/userModel.js";
 import { supabase } from "../config/db.js";
-import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
+import { recordLoginAttempt } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices } from "../models/deviceModel.js";
 import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
+import { isRateLimited, sendRateLimited, recordFailedAttempt } from "../utils/attemptLimit.js";
 
 // Configure Argon2id with consistent security parameters
 // Memory (m): 64 MiB, Time/Iterations (t): 3 passes, Parallelism (p): 4 lanes/threads
@@ -16,10 +17,6 @@ const argon2Options = {
   hashLength: 32,
   type: argon2.argon2id,
 };
-
-// Rate limit: max failed attempts per IP within the window
-const MAX_FAILED_ATTEMPTS = 5;
-const RATE_LIMIT_WINDOW_MINUTES = 15;
 
 export const register = async (req, res) => {
   try {
@@ -90,9 +87,8 @@ export const login = async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid device ID.", code: "DEVICE_ID_REQUIRED" });
     }
 
-    const recentFailures = await countRecentFailedAttempts(clientIp, null, RATE_LIMIT_WINDOW_MINUTES);
-    if (recentFailures >= MAX_FAILED_ATTEMPTS) {
-      return res.status(429).json({ error: 'Too many failed login attempts. Please try again later.' });
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "login");
     }
 
     let user;
@@ -233,10 +229,15 @@ export const verifyPassword = async (req, res) => {
       return res.status(400).json({ error: "Auth hash required" });
     }
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "password");
+    }
+
     const user = await getUserByEmail(decoded.email);
 
     const isValid = await argon2.verify(user.server_hash, auth_hash, argon2Options);
     if (!isValid) {
+      await recordFailedAttempt(req, user.id, "invalid_reauth");
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -270,6 +271,10 @@ export const recover = async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "recovery");
+    }
+
     const user = await getUserByEmail(email);
     if (!user) {
       return res.status(404).json({ error: "Account not found" });
@@ -295,6 +300,7 @@ export const recover = async (req, res) => {
       keyMatches = false;
     }
     if (!keyMatches) {
+      await recordFailedAttempt(req, user.id, "invalid_recovery_key");
       return res.status(401).json({ error: "Invalid recovery key" });
     }
 
@@ -339,6 +345,10 @@ export const changePassword = async (req, res) => {
 
     const userId = req.user.id;
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "password");
+    }
+
     // A valid session alone is not enough to replace the master password:
     // the caller must also prove they know the current one.
     const { data: user, error: userError } = await supabase
@@ -351,6 +361,7 @@ export const changePassword = async (req, res) => {
 
     const isCurrentValid = await argon2.verify(user.server_hash, current_auth_hash, argon2Options);
     if (!isCurrentValid) {
+      await recordFailedAttempt(req, userId, "invalid_current_password");
       return res.status(401).json({ error: "Current password is incorrect", code: "INVALID_CURRENT_PASSWORD" });
     }
 
