@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import { getUserById } from "../models/userModel.js";
 import { issueSession } from "../utils/session.js";
 import { setDeviceTrusted } from "../models/deviceModel.js";
+import { isRateLimited, sendRateLimited, recordFailedAttempt } from "../utils/attemptLimit.js";
 
 function getUserIdFromToken(req) {
   const token = req.cookies["sb-access-token"];
@@ -148,6 +149,11 @@ export const verifyLogin = async (req, res) => {
       return res.status(400).json({ error: "Code must be a 6-digit number" });
     }
 
+    // A 6-digit code is easy to guess if tries are free: share the per-IP failure budget
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
@@ -170,6 +176,7 @@ export const verifyLogin = async (req, res) => {
       });
 
       if (!verified) {
+        await recordFailedAttempt(req, userId, "invalid_totp_code");
         return res.status(401).json({ error: "Invalid code. Please try again." });
       }
 
@@ -272,6 +279,10 @@ export const redeemBackup = async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "Code is required" });
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId)
       return res.status(401).json({ error: "Unauthorized - no access token" });
@@ -299,6 +310,7 @@ export const redeemBackup = async (req, res) => {
       }
 
       if (matchedIndex === -1) {
+        await recordFailedAttempt(req, userId, "invalid_backup_code");
         return res.status(401).json({ error: "Invalid or already used backup code" });
       }
 
