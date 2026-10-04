@@ -9,6 +9,13 @@ import { getUserById } from "../models/userModel.js";
 import { issueSession } from "../utils/session.js";
 import { setDeviceTrusted } from "../models/deviceModel.js";
 
+// Expiry of the "password verified, enter the code" step (see authController.login)
+const mfaSessionExpired = (res) =>
+  res.status(401).json({
+    error: "Your sign-in timed out. Please log in again.",
+    code: "MFA_SESSION_EXPIRED",
+  });
+
 function getUserIdFromToken(req) {
   const token = req.cookies["sb-access-token"];
   if (!token) return null;
@@ -201,6 +208,7 @@ export const verifyLogin = async (req, res) => {
       return res.status(500).json({ error: "Failed to verify TOTP. Please try again." });
     }
   } catch (err) {
+    if (err.name === "TokenExpiredError") return mfaSessionExpired(res);
     if (err.name === "JsonWebTokenError") {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
@@ -329,6 +337,7 @@ export const redeemBackup = async (req, res) => {
       return res.status(500).json({ error: "Failed to verify backup code. Please try again." });
     }
   } catch (err) {
+    if (err.name === "TokenExpiredError") return mfaSessionExpired(res);
     if (err.name === "JsonWebTokenError")
       return res.status(401).json({ error: "Invalid or expired token" });
     return res.status(500).json({ error: "Internal server error" });
