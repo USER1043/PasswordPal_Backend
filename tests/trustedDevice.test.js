@@ -21,6 +21,7 @@ vi.mock("../models/loginAttemptModel.js", () => ({
 }));
 vi.mock("../models/mfaSettingsModel.js", () => ({
   getMfaSettings: vi.fn().mockResolvedValue({ is_totp_enabled: true, totp_secret_enc: "enc" }),
+  consumeTotpStep: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("../utils/encryption.js", () => ({
   encryptData: (d) => d,
@@ -131,7 +132,7 @@ describe("trust this device is bound to the device", () => {
       `sb-access-token=${jwt.sign({ id: "u1", email: "a@example.com", type: "mfa-pending" }, process.env.JWT_SECRET)}`;
 
     it("marks this device row trusted (no cookie) when trust_device is set", async () => {
-      vi.spyOn(speakeasy.totp, "verify").mockReturnValue(true);
+      vi.spyOn(speakeasy.totp, "verifyDelta").mockReturnValue({ delta: 0 });
       const res = await request(app).post("/auth/totp/verify-login")
         .set("Cookie", [pending()]).set("X-Device-Id", DEVICE_ID)
         .send({ code: "123456", trust_device: true });
@@ -142,7 +143,7 @@ describe("trust this device is bound to the device", () => {
     });
 
     it("does not trust the device when trust_device is not set", async () => {
-      vi.spyOn(speakeasy.totp, "verify").mockReturnValue(true);
+      vi.spyOn(speakeasy.totp, "verifyDelta").mockReturnValue({ delta: 0 });
       const res = await request(app).post("/auth/totp/verify-login")
         .set("Cookie", [pending()]).set("X-Device-Id", DEVICE_ID)
         .send({ code: "123456" });

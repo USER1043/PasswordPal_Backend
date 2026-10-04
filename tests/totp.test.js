@@ -12,6 +12,7 @@ vi.mock('../models/mfaSettingsModel.js', () => ({
     disableMfa: vi.fn(),
     upsertMfaSettings: vi.fn(),
     getMfaSettings: vi.fn(),
+    consumeTotpStep: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../models/userModel.js', () => ({
@@ -23,6 +24,11 @@ vi.mock('../models/deviceModel.js', () => ({
     setDeviceRefreshToken: vi.fn().mockResolvedValue(),
     getDeviceForSession: vi.fn(),
     setDeviceTrusted: vi.fn().mockResolvedValue(),
+}));
+
+vi.mock('../models/loginAttemptModel.js', () => ({
+    recordLoginAttempt: vi.fn().mockResolvedValue({}),
+    countRecentFailedAttempts: vi.fn().mockResolvedValue(0),
 }));
 
 const DEVICE_ID = '3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c';
@@ -178,17 +184,29 @@ describe('TOTP Routes', () => {
     });
 
     describe('POST /totp/disable', () => {
-        it('should disable totp', async () => {
+        it('should disable totp when given a valid code', async () => {
             db.disableMfa.mockResolvedValue(true);
+            db.getMfaSettings.mockResolvedValue({
+                is_totp_enabled: true,
+                totp_secret_enc: `encrypted_${secret.base32}`
+            });
 
-            // Action: Request to turn off MFA
+            const res = await request(app)
+                .post('/totp/disable')
+                .set('Cookie', [`sb-access-token=${validToken}`])
+                .send({ code: speakeasy.totp({ secret: secret.base32, encoding: 'base32' }) });
+
+            expect(res.status).toBe(200);
+            expect(db.disableMfa).toHaveBeenCalledWith('123');
+        });
+
+        it('should refuse to disable totp without a code', async () => {
             const res = await request(app)
                 .post('/totp/disable')
                 .set('Cookie', [`sb-access-token=${validToken}`]);
 
-            // Assertions: Should call the DB function to remove the secret
-            expect(res.status).toBe(200);
-            expect(db.disableMfa).toHaveBeenCalledWith('123');
+            expect(res.status).toBe(400);
+            expect(db.disableMfa).not.toHaveBeenCalled();
         });
     });
 

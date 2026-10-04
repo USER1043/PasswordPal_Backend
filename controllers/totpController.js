@@ -1,13 +1,22 @@
 import jwt from "jsonwebtoken";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
-import { getMfaSettings, upsertMfaSettings, disableMfa } from "../models/mfaSettingsModel.js";
+import { getMfaSettings, upsertMfaSettings, disableMfa, consumeTotpStep } from "../models/mfaSettingsModel.js";
+import { verifyTotp } from "../utils/totp.js";
 import { encryptData, decryptData } from "../utils/encryption.js";
 import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
 import bcrypt from "bcryptjs";
 import { getUserById } from "../models/userModel.js";
 import { issueSession } from "../utils/session.js";
 import { setDeviceTrusted } from "../models/deviceModel.js";
+import { isRateLimited, sendRateLimited, recordFailedAttempt } from "../utils/attemptLimit.js";
+
+// Expiry of the "password verified, enter the code" step (see authController.login)
+const mfaSessionExpired = (res) =>
+  res.status(401).json({
+    error: "Your sign-in timed out. Please log in again.",
+    code: "MFA_SESSION_EXPIRED",
+  });
 
 function getUserIdFromToken(req) {
   const token = req.cookies["sb-access-token"];
@@ -60,14 +69,9 @@ export const verifySetup = async (req, res) => {
       return res.status(400).json({ error: "Code must be a 6-digit number" });
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: secret,
-      encoding: "base32",
-      token: String(code),
-      window: 4,
-    });
+    const match = verifyTotp({ secret, token: code });
 
-    if (!verified) {
+    if (!match) {
       return res.status(401).json({ error: "Invalid code. Please try again." });
     }
 
@@ -88,6 +92,8 @@ export const verifySetup = async (req, res) => {
         userId,
         totpSecretEnc: encryptedSecret,
         isTotpEnabled: true,
+        // The code used to set up counts as used, so it cannot also log in straight away
+        lastUsedStep: match.step,
       });
 
       const codes = generateBackupCodes(10, 10);
@@ -148,6 +154,11 @@ export const verifyLogin = async (req, res) => {
       return res.status(400).json({ error: "Code must be a 6-digit number" });
     }
 
+    // A 6-digit code is easy to guess if tries are free: share the per-IP failure budget
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
@@ -162,15 +173,21 @@ export const verifyLogin = async (req, res) => {
     try {
       const decryptedSecret = decryptData(settings.totp_secret_enc);
 
-      const verified = speakeasy.totp.verify({
-        secret: decryptedSecret,
-        encoding: "base32",
-        token: String(code),
-        window: 4,
-      });
+      const match = verifyTotp({ secret: decryptedSecret, token: code });
 
-      if (!verified) {
+      if (!match) {
+        await recordFailedAttempt(req, userId, "invalid_totp_code");
         return res.status(401).json({ error: "Invalid code. Please try again." });
+      }
+
+      // A code works once: a second use of the same 30-second step (a code someone saw or
+      // intercepted) is refused, and counts as a failed attempt.
+      if (!(await consumeTotpStep(userId, match.step))) {
+        await recordFailedAttempt(req, userId, "invalid_totp_code");
+        return res.status(401).json({
+          error: "That code was already used. Wait for the next code and try again.",
+          code: "TOTP_CODE_REUSED",
+        });
       }
 
       const user = await getUserById(userId);
@@ -201,6 +218,7 @@ export const verifyLogin = async (req, res) => {
       return res.status(500).json({ error: "Failed to verify TOTP. Please try again." });
     }
   } catch (err) {
+    if (err.name === "TokenExpiredError") return mfaSessionExpired(res);
     if (err.name === "JsonWebTokenError") {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
@@ -208,11 +226,56 @@ export const verifyLogin = async (req, res) => {
   }
 };
 
+// True if `code` matches one of the user's unused backup codes (not consumed here)
+async function matchesBackupCode(settings, code) {
+  let hashes = [];
+  try {
+    hashes = JSON.parse(settings.backup_codes_enc || "[]");
+  } catch {
+    hashes = [];
+  }
+  for (const hash of hashes) {
+    if (await bcrypt.compare(code, hash)) return true;
+  }
+  return false;
+}
+
 export const disable = async (req, res) => {
   try {
+    // A session alone must not be enough to switch two-factor off: the caller has to prove
+    // the second factor with a current authenticator code (or an unused backup code).
+    const { code } = req.body ?? {};
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ error: "A code is required to disable two-factor authentication" });
+    }
+
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
+    }
+
+    const settings = await getMfaSettings(userId);
+    if (!settings?.is_totp_enabled || !settings?.totp_secret_enc) {
+      return res.status(400).json({ error: "TOTP is not enabled for this user" });
+    }
+
+    const isTotpCode = /^\d{6}$/.test(code);
+    let accepted = false;
+    if (isTotpCode) {
+      const match = verifyTotp({ secret: decryptData(settings.totp_secret_enc), token: code });
+      // A code that has already been used (e.g. to log in just now) cannot be used again
+      accepted = Boolean(match) && (await consumeTotpStep(userId, match.step));
+    } else {
+      accepted = await matchesBackupCode(settings, code);
+    }
+
+    if (!accepted) {
+      await recordFailedAttempt(req, userId, isTotpCode ? "invalid_totp_code" : "invalid_backup_code");
+      return res.status(401).json({ error: "Invalid code. Please try again.", code: "INVALID_CODE" });
     }
 
     await disableMfa(userId);
@@ -272,6 +335,10 @@ export const redeemBackup = async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "Code is required" });
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId)
       return res.status(401).json({ error: "Unauthorized - no access token" });
@@ -299,6 +366,7 @@ export const redeemBackup = async (req, res) => {
       }
 
       if (matchedIndex === -1) {
+        await recordFailedAttempt(req, userId, "invalid_backup_code");
         return res.status(401).json({ error: "Invalid or already used backup code" });
       }
 
@@ -329,6 +397,7 @@ export const redeemBackup = async (req, res) => {
       return res.status(500).json({ error: "Failed to verify backup code. Please try again." });
     }
   } catch (err) {
+    if (err.name === "TokenExpiredError") return mfaSessionExpired(res);
     if (err.name === "JsonWebTokenError")
       return res.status(401).json({ error: "Invalid or expired token" });
     return res.status(500).json({ error: "Internal server error" });

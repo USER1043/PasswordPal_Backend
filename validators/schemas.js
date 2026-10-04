@@ -62,6 +62,7 @@ import Joi from 'joi';
  * @property {boolean} is_totp_enabled - Whether TOTP MFA is currently active.
  * @property {string|null} backup_codes_enc - Encrypted backup codes blob.
  * @property {number} codes_used - Count of backup codes consumed.
+ * @property {number|null} last_used_step - Latest 30-second TOTP step already used to log in (replay protection).
  * @property {string} updated_at - ISO 8601 last-update timestamp.
  */
 
@@ -95,7 +96,7 @@ import Joi from 'joi';
  * @property {boolean} was_successful - Whether the login attempt succeeded.
  * @property {string|null} user_agent - Browser/client User-Agent string.
  * @property {string|null} device_id - Client device UUID (X-Device-Id) the attempt came from.
- * @property {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|null} failure_reason - Why a failed attempt was refused.
+ * @property {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|'invalid_totp_code'|'invalid_backup_code'|null} failure_reason - Why a failed attempt was refused.
  */
 
 /**
@@ -210,6 +211,7 @@ export const mfaSettingSchema = Joi.object({
     is_totp_enabled: Joi.boolean().default(false),
     backup_codes_enc: Joi.string().allow(null).optional(),
     codes_used: Joi.number().integer().min(0).default(0),
+    last_used_step: Joi.number().integer().allow(null).optional(),
     updated_at: isoDate.optional(),
 });
 
@@ -249,7 +251,7 @@ export const loginAttemptSchema = Joi.object({
     was_successful: Joi.boolean().required(),
     user_agent: Joi.string().allow(null).optional(),
     device_id: Joi.string().allow(null).optional(),
-    failure_reason: Joi.string().valid('invalid_credentials', 'device_blocked', 'invalid_recovery_key', 'invalid_reauth', 'invalid_current_password').allow(null).optional(),
+    failure_reason: Joi.string().valid('invalid_credentials', 'device_blocked', 'invalid_recovery_key', 'invalid_reauth', 'invalid_current_password', 'invalid_totp_code', 'invalid_backup_code').allow(null).optional(),
 });
 
 // ---------------------------------------------------------------------------

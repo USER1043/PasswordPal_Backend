@@ -13,7 +13,7 @@ import { supabase } from "../config/db.js";
  * @param {boolean} params.wasSuccessful - Whether the login succeeded.
  * @param {string|null} [params.userAgent] - Browser/client User-Agent string.
  * @param {string|null} [params.deviceId] - Client device UUID from the X-Device-Id header.
- * @param {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|null} [params.failureReason] - Why a failed attempt was refused.
+ * @param {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|'invalid_totp_code'|'invalid_backup_code'|null} [params.failureReason] - Why a failed attempt was refused.
  * @returns {Promise<import('../validators/schemas.js').LoginAttempt>}
  * @throws {Error} If the database insert fails.
  */

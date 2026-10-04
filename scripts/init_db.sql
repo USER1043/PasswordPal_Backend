@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS public.mfa_settings (
     is_totp_enabled  BOOLEAN     NOT NULL DEFAULT FALSE,
     backup_codes_enc TEXT,                          -- Encrypted/hashed backup codes blob (JSON array)
     codes_used       INTEGER     NOT NULL DEFAULT 0,
+    last_used_step   BIGINT,                        -- Latest 30-second TOTP step already used to log in.
+                                                    -- A code from this step or earlier is refused (replay protection).
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -133,7 +135,7 @@ CREATE TABLE IF NOT EXISTS public.login_attempts (
     was_successful BOOLEAN     NOT NULL DEFAULT FALSE,
     user_agent     TEXT,
     device_id      TEXT,                            -- Client device UUID (X-Device-Id header)
-    failure_reason TEXT        CHECK (failure_reason IN ('invalid_credentials', 'device_blocked', 'invalid_recovery_key', 'invalid_reauth', 'invalid_current_password')),
+    failure_reason TEXT        CHECK (failure_reason IN ('invalid_credentials', 'device_blocked', 'invalid_recovery_key', 'invalid_reauth', 'invalid_current_password', 'invalid_totp_code', 'invalid_backup_code')),
                                                     -- Why a failed attempt was refused. NULL on success.
     attempt_time   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
