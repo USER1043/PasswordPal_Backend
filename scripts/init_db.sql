@@ -287,25 +287,10 @@ CREATE POLICY "Users can manage their own vault records"
 CREATE POLICY "Users can manage their own devices"
     ON public.user_devices FOR ALL USING (auth.uid() = user_id);
 
--- Open policies - service_role (Node backend) bypasses RLS automatically.
--- These cover authenticated/anon roles for direct access if needed.
-CREATE POLICY "Allow all for mfa_settings"
-    ON public.mfa_settings    FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for login_attempts"
-    ON public.login_attempts  FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for recovery_keys"
-    ON public.recovery_keys   FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for refresh_tokens"
-    ON public.refresh_tokens  FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for sync_queue"
-    ON public.sync_queue      FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for conflicts"
-    ON public.conflicts       FOR ALL USING (true) WITH CHECK (true);
+-- Every other table has no policy at all: with RLS on, that denies everyone except
+-- service_role (the Node backend), which bypasses RLS. The three policies above test
+-- auth.uid(), which this app (own JWTs, no Supabase Auth) never satisfies, so they are
+-- inert; access is closed off by the grants below.
 
 -- ============================================================================
 -- STORED PROCEDURES (RPCs)
@@ -391,18 +376,23 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================================================
--- GRANTS
+-- GRANTS - backend only
+-- Only service_role (the Node backend) may touch the database. anon and
+-- authenticated get nothing, so the project's public key cannot be used to read
+-- or write tables or call functions directly.
 -- ============================================================================
-GRANT ALL ON public.mfa_settings   TO service_role, authenticated, anon;
-GRANT ALL ON public.login_attempts TO service_role, authenticated, anon;
-GRANT ALL ON public.recovery_keys  TO service_role, authenticated, anon;
-GRANT ALL ON public.refresh_tokens TO service_role, authenticated, anon;
-GRANT ALL ON public.sync_queue     TO service_role, authenticated, anon;
-GRANT ALL ON public.conflicts      TO service_role, authenticated, anon;
--- users and user_devices also need explicit grants so that the Node service_role
--- client can insert/update after a schema reload without losing default privileges.
-GRANT ALL ON public.users          TO service_role, authenticated, anon;
-GRANT ALL ON public.vault_records  TO service_role, authenticated, anon;
-GRANT ALL ON public.user_devices   TO service_role, authenticated, anon;
-GRANT ALL ON public.device_events  TO service_role;
-GRANT ALL ON public.recovery_challenges TO service_role;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+GRANT  ALL ON ALL TABLES IN SCHEMA public TO service_role;
+
+REVOKE ALL ON FUNCTION public.atomic_upsert_vault_record(UUID, UUID, TEXT, TEXT, TEXT, INTEGER)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_upsert_vault_record(UUID, UUID, TEXT, TEXT, TEXT, INTEGER)
+    TO service_role;
+REVOKE ALL ON FUNCTION public.update_vault_record(UUID, TEXT, TEXT, INTEGER)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_vault_record(UUID, TEXT, TEXT, INTEGER)
+    TO service_role;
+
+-- Objects created later by this role are not handed to the public-facing roles either
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC, anon, authenticated;
