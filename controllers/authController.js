@@ -2,12 +2,13 @@ import jwt from "jsonwebtoken";
 import argon2 from "argon2";
 import { createUser, getUserByEmail } from "../models/userModel.js";
 import { supabase } from "../config/db.js";
-import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
+import { recordLoginAttempt } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
-import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices } from "../models/deviceModel.js";
+import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices, isDeviceTrusted, clearTrustedDevices } from "../models/deviceModel.js";
 import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
 import { buildRecoveryMessage, verifyRecoverySignature } from "../utils/recoverySignature.js";
 import { newChallenge, storeChallenge, consumeChallenge, CHALLENGE_TTL_SECONDS } from "../models/recoveryChallengeModel.js";
+import { isRateLimited, sendRateLimited, recordFailedAttempt } from "../utils/attemptLimit.js";
 
 // Configure Argon2id with consistent security parameters
 // Memory (m): 64 MiB, Time/Iterations (t): 3 passes, Parallelism (p): 4 lanes/threads
@@ -18,10 +19,6 @@ const argon2Options = {
   hashLength: 32,
   type: argon2.argon2id,
 };
-
-// Rate limit: max failed attempts per IP within the window
-const MAX_FAILED_ATTEMPTS = 5;
-const RATE_LIMIT_WINDOW_MINUTES = 15;
 
 export const register = async (req, res) => {
   try {
@@ -90,9 +87,8 @@ export const login = async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid device ID.", code: "DEVICE_ID_REQUIRED" });
     }
 
-    const recentFailures = await countRecentFailedAttempts(clientIp, null, RATE_LIMIT_WINDOW_MINUTES);
-    if (recentFailures >= MAX_FAILED_ATTEMPTS) {
-      return res.status(429).json({ error: 'Too many failed login attempts. Please try again later.' });
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "login");
     }
 
     let user;
@@ -120,16 +116,10 @@ export const login = async (req, res) => {
 
     await recordLoginAttempt({ userId: user.id, ipAddress: clientIp, wasSuccessful: true, userAgent, deviceId }).catch(() => { });
 
-    const trustedDeviceToken = req.cookies["sb-trusted-device"];
-    let isTrustedDevice = false;
-    if (trustedDeviceToken) {
-      try {
-        const decoded = jwt.verify(trustedDeviceToken, process.env.JWT_SECRET);
-        isTrustedDevice = decoded.id === user.id && decoded.type === "trusted-device";
-      } catch {
-        isTrustedDevice = false;
-      }
-    }
+    // Trust is stored on this device's row (see setDeviceTrusted), not in a cookie.
+    // Drop the cookie older versions set; it is no longer honoured.
+    res.clearCookie("sb-trusted-device");
+    const isTrustedDevice = isDeviceTrusted(knownDevice);
 
     const mfaSettings = await getMfaSettings(user.id);
     if (mfaSettings?.is_totp_enabled && !isTrustedDevice) {
@@ -233,10 +223,15 @@ export const verifyPassword = async (req, res) => {
       return res.status(400).json({ error: "Auth hash required" });
     }
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "password");
+    }
+
     const user = await getUserByEmail(decoded.email);
 
     const isValid = await argon2.verify(user.server_hash, auth_hash, argon2Options);
     if (!isValid) {
+      await recordFailedAttempt(req, user.id, "invalid_reauth");
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -265,6 +260,11 @@ export const verifyPassword = async (req, res) => {
 export const recoveryChallenge = async (req, res) => {
   try {
     const { email } = req.body;
+
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "recovery");
+    }
+
     const challenge = newChallenge();
 
     let user = null;
@@ -300,6 +300,10 @@ export const recover = async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "recovery");
+    }
+
     const user = await getUserByEmail(email);
     if (!user) {
       return res.status(404).json({ error: "Account not found" });
@@ -322,12 +326,14 @@ export const recover = async (req, res) => {
       newAuthHash: new_auth_hash,
     });
     if (!verifyRecoverySignature(rkRow.public_key, signature, message)) {
+      await recordFailedAttempt(req, user.id, "invalid_recovery_key");
       return res.status(401).json({ error: "Invalid recovery key" });
     }
 
     // Valid signature: now spend the challenge. It must exist, be this user's and
     // be unexpired; a replay finds it already gone.
     if (!(await consumeChallenge(user.id, challenge))) {
+      await recordFailedAttempt(req, user.id, "invalid_recovery_key");
       return res.status(401).json({ error: "Recovery challenge is invalid, expired or already used", code: "CHALLENGE_INVALID" });
     }
 
@@ -346,7 +352,7 @@ export const recover = async (req, res) => {
 
     await supabase
       .from("user_devices")
-      .update({ is_revoked: true, revoked_at: new Date().toISOString() })
+      .update({ is_revoked: true, revoked_at: new Date().toISOString(), trusted_until: null })
       .eq("user_id", user.id);
 
     return res.status(200).json({ message: "Account recovered successfully. Please log in with your new password." });
@@ -365,6 +371,10 @@ export const changePassword = async (req, res) => {
 
     const userId = req.user.id;
 
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "password");
+    }
+
     // A valid session alone is not enough to replace the master password:
     // the caller must also prove they know the current one.
     const { data: user, error: userError } = await supabase
@@ -377,6 +387,7 @@ export const changePassword = async (req, res) => {
 
     const isCurrentValid = await argon2.verify(user.server_hash, current_auth_hash, argon2Options);
     if (!isCurrentValid) {
+      await recordFailedAttempt(req, userId, "invalid_current_password");
       return res.status(401).json({ error: "Current password is incorrect", code: "INVALID_CURRENT_PASSWORD" });
     }
 
@@ -399,6 +410,8 @@ export const changePassword = async (req, res) => {
     let otherDevicesSignedOut = true;
     try {
       await revokeOtherDevices(userId, req.user.did);
+      // ...and the current device no longer gets to skip two-factor either
+      await clearTrustedDevices(userId);
     } catch (revokeErr) {
       otherDevicesSignedOut = false;
       console.error("Failed to revoke other devices after password change:", revokeErr);

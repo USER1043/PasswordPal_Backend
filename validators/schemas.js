@@ -95,7 +95,7 @@ import Joi from 'joi';
  * @property {boolean} was_successful - Whether the login attempt succeeded.
  * @property {string|null} user_agent - Browser/client User-Agent string.
  * @property {string|null} device_id - Client device UUID (X-Device-Id) the attempt came from.
- * @property {'invalid_credentials'|'device_blocked'|null} failure_reason - Why a failed attempt was refused.
+ * @property {'invalid_credentials'|'device_blocked'|'invalid_recovery_key'|'invalid_reauth'|'invalid_current_password'|null} failure_reason - Why a failed attempt was refused.
  */
 
 /**
@@ -249,7 +249,7 @@ export const loginAttemptSchema = Joi.object({
     was_successful: Joi.boolean().required(),
     user_agent: Joi.string().allow(null).optional(),
     device_id: Joi.string().allow(null).optional(),
-    failure_reason: Joi.string().valid('invalid_credentials', 'device_blocked').allow(null).optional(),
+    failure_reason: Joi.string().valid('invalid_credentials', 'device_blocked', 'invalid_recovery_key', 'invalid_reauth', 'invalid_current_password').allow(null).optional(),
 });
 
 // ---------------------------------------------------------------------------

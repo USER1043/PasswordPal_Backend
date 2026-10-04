@@ -61,6 +61,7 @@ vi.mock("../config/db.js", () => {
 
 import router from "../route/auth.js";
 import * as users from "../models/userModel.js";
+import { recordLoginAttempt, countRecentFailedAttempts } from "../models/loginAttemptModel.js";
 import { buildRecoveryMessage } from "../utils/recoverySignature.js";
 
 const app = express();
@@ -182,6 +183,29 @@ describe("recovery by signature", () => {
       expect(db.writes.filter((w) => w.table === "users")).toHaveLength(0);
       // A bad signature must not burn the challenge
       expect(db.recovery_challenges.size).toBe(1);
+    });
+
+    it("limits attempts: the challenge endpoint and recover return 429 once the IP is over the limit", async () => {
+      countRecentFailedAttempts.mockResolvedValue(5);
+      const challenge = await request(app).post("/auth/recover/challenge").send({ email: "a@example.com" });
+      expect(challenge.status).toBe(429);
+      expect(db.recovery_challenges.size).toBe(0);
+
+      const c = "ab".repeat(32);
+      const res = await request(app).post("/auth/recover").send(body(c, sign(keys.privateKey, { challenge: c, ...NEW })));
+      expect(res.status).toBe(429);
+      countRecentFailedAttempts.mockResolvedValue(0);
+    });
+
+    it("records a bad signature and a bad challenge as failed attempts", async () => {
+      const challenge = await getChallenge();
+      await request(app).post("/auth/recover").send(body(challenge, "00".repeat(64)));
+      expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ failureReason: "invalid_recovery_key", userId: "u1" }));
+
+      recordLoginAttempt.mockClear();
+      const unissued = "ee".repeat(32);
+      await request(app).post("/auth/recover").send(body(unissued, sign(keys.privateKey, { challenge: unissued, ...NEW })));
+      expect(recordLoginAttempt).toHaveBeenCalledWith(expect.objectContaining({ failureReason: "invalid_recovery_key" }));
     });
 
     it("fails a signature from a different key", async () => {

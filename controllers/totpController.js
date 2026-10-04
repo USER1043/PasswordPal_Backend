@@ -7,6 +7,7 @@ import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
 import bcrypt from "bcryptjs";
 import { getUserById } from "../models/userModel.js";
 import { issueSession } from "../utils/session.js";
+import { setDeviceTrusted } from "../models/deviceModel.js";
 
 function getUserIdFromToken(req) {
   const token = req.cookies["sb-access-token"];
@@ -172,31 +173,20 @@ export const verifyLogin = async (req, res) => {
         return res.status(401).json({ error: "Invalid code. Please try again." });
       }
 
-      const { trust_device } = req.body;
-      if (trust_device) {
-        const deviceToken = jwt.sign(
-          {
-            id: userId,
-            type: "trusted-device",
-            issuedAt: Date.now(),
-          },
-          process.env.JWT_SECRET,
-          { expiresIn: "30d" },
-        );
-
-        res.cookie("sb-trusted-device", deviceToken, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-          maxAge: 30 * 24 * 60 * 60 * 1000,
-        });
-      }
-
       const user = await getUserById(userId);
 
       const session = await issueSession(req, res, user);
       if (!session.ok) {
         return res.status(session.status).json(session.body);
+      }
+
+      // "Trust this device" is recorded on this device's row, so it only applies to
+      // this device and can be cancelled server-side (password change, revoke, block).
+      if (req.body.trust_device) {
+        // Best effort: if this fails the user simply gets asked for a code next time
+        await setDeviceTrusted(session.device.id, userId).catch((err) => {
+          console.error("Failed to mark device as trusted:", err);
+        });
       }
 
       return res.status(200).json({
