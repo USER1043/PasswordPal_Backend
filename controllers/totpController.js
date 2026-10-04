@@ -226,11 +226,56 @@ export const verifyLogin = async (req, res) => {
   }
 };
 
+// True if `code` matches one of the user's unused backup codes (not consumed here)
+async function matchesBackupCode(settings, code) {
+  let hashes = [];
+  try {
+    hashes = JSON.parse(settings.backup_codes_enc || "[]");
+  } catch {
+    hashes = [];
+  }
+  for (const hash of hashes) {
+    if (await bcrypt.compare(code, hash)) return true;
+  }
+  return false;
+}
+
 export const disable = async (req, res) => {
   try {
+    // A session alone must not be enough to switch two-factor off: the caller has to prove
+    // the second factor with a current authenticator code (or an unused backup code).
+    const { code } = req.body ?? {};
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ error: "A code is required to disable two-factor authentication" });
+    }
+
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "verification");
+    }
+
     const userId = getUserIdFromToken(req);
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized - no access token" });
+    }
+
+    const settings = await getMfaSettings(userId);
+    if (!settings?.is_totp_enabled || !settings?.totp_secret_enc) {
+      return res.status(400).json({ error: "TOTP is not enabled for this user" });
+    }
+
+    const isTotpCode = /^\d{6}$/.test(code);
+    let accepted = false;
+    if (isTotpCode) {
+      const match = verifyTotp({ secret: decryptData(settings.totp_secret_enc), token: code });
+      // A code that has already been used (e.g. to log in just now) cannot be used again
+      accepted = Boolean(match) && (await consumeTotpStep(userId, match.step));
+    } else {
+      accepted = await matchesBackupCode(settings, code);
+    }
+
+    if (!accepted) {
+      await recordFailedAttempt(req, userId, isTotpCode ? "invalid_totp_code" : "invalid_backup_code");
+      return res.status(401).json({ error: "Invalid code. Please try again.", code: "INVALID_CODE" });
     }
 
     await disableMfa(userId);

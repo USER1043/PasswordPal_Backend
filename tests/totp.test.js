@@ -184,17 +184,29 @@ describe('TOTP Routes', () => {
     });
 
     describe('POST /totp/disable', () => {
-        it('should disable totp', async () => {
+        it('should disable totp when given a valid code', async () => {
             db.disableMfa.mockResolvedValue(true);
+            db.getMfaSettings.mockResolvedValue({
+                is_totp_enabled: true,
+                totp_secret_enc: `encrypted_${secret.base32}`
+            });
 
-            // Action: Request to turn off MFA
+            const res = await request(app)
+                .post('/totp/disable')
+                .set('Cookie', [`sb-access-token=${validToken}`])
+                .send({ code: speakeasy.totp({ secret: secret.base32, encoding: 'base32' }) });
+
+            expect(res.status).toBe(200);
+            expect(db.disableMfa).toHaveBeenCalledWith('123');
+        });
+
+        it('should refuse to disable totp without a code', async () => {
             const res = await request(app)
                 .post('/totp/disable')
                 .set('Cookie', [`sb-access-token=${validToken}`]);
 
-            // Assertions: Should call the DB function to remove the secret
-            expect(res.status).toBe(200);
-            expect(db.disableMfa).toHaveBeenCalledWith('123');
+            expect(res.status).toBe(400);
+            expect(db.disableMfa).not.toHaveBeenCalled();
         });
     });
 
