@@ -45,6 +45,8 @@ vi.mock("../models/deviceModel.js", () => ({
   updateDeviceToken: vi.fn().mockResolvedValue({}),
   revokeDeviceByToken: vi.fn().mockResolvedValue({}),
   revokeOtherDevices: vi.fn().mockResolvedValue(),
+  isDeviceTrusted: vi.fn().mockReturnValue(false),
+  clearTrustedDevices: vi.fn().mockResolvedValue(),
 }));
 
 const DEVICE_ID = "3f2b8c1e-9a4d-4e7b-8c6a-1d2e3f4a5b6c";
