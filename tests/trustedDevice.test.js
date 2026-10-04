@@ -4,6 +4,8 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import speakeasy from "speakeasy";
+import crypto from "crypto";
+import { buildRecoveryMessage } from "../utils/recoverySignature.js";
 
 vi.mock("argon2", () => ({
   default: { verify: vi.fn().mockResolvedValue(true), hash: vi.fn().mockResolvedValue("h"), argon2id: 2 },
@@ -36,13 +38,23 @@ vi.mock("../models/deviceModel.js", async (importOriginal) => ({
   clearTrustedDevices: vi.fn().mockResolvedValue(),
 }));
 
+// Recovery needs a real signature; the challenge store is stubbed (covered in recovery.test.js)
+const recoveryKeys = crypto.generateKeyPairSync("ed25519");
+const recoveryPublicHex = recoveryKeys.publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+vi.mock("../models/recoveryChallengeModel.js", () => ({
+  newChallenge: vi.fn(),
+  storeChallenge: vi.fn(),
+  consumeChallenge: vi.fn().mockResolvedValue(true),
+  CHALLENGE_TTL_SECONDS: 300,
+}));
+
 const userDevicesUpdates = [];
 vi.mock("../config/db.js", () => {
   const make = (table) => {
     const chain = {
       select: vi.fn(() => chain),
       eq: vi.fn(() => chain),
-      single: vi.fn().mockResolvedValue({ data: { server_hash: "x", key_hash: "x" }, error: null }),
+      single: vi.fn().mockResolvedValue({ data: { server_hash: "x", public_key: recoveryPublicHex }, error: null }),
       update: vi.fn((row) => { if (table === "user_devices") userDevicesUpdates.push(row); return chain; }),
       then: (resolve) => resolve({ error: null }),
     };
@@ -152,9 +164,11 @@ describe("trust this device is bound to the device", () => {
     });
 
     it("on account recovery", async () => {
+      const fields = { challenge: "cd".repeat(32), newSalt: "c2FsdA==", newWrappedMek: "d3JhcHBlZA==", newAuthHash: "ef".repeat(32) };
+      const signature = crypto.sign(null, buildRecoveryMessage(fields), recoveryKeys.privateKey).toString("hex");
       const res = await request(app).post("/auth/recover").send({
-        email: "a@example.com", recovery_key_hash: "ab".repeat(32),
-        new_salt: "s", new_wrapped_mek: "m", new_auth_hash: "h",
+        email: "a@example.com", challenge: fields.challenge, signature,
+        new_salt: fields.newSalt, new_wrapped_mek: fields.newWrappedMek, new_auth_hash: fields.newAuthHash,
       });
       expect(res.status).toBe(200);
       expect(userDevicesUpdates).toContainEqual(expect.objectContaining({ is_revoked: true, trusted_until: null }));

@@ -26,7 +26,7 @@ vi.mock("../config/db.js", () => {
   const chain = {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
-    single: vi.fn().mockResolvedValue({ data: { server_hash: "x", key_hash: "x" }, error: null }),
+    single: vi.fn().mockResolvedValue({ data: { server_hash: "x", public_key: "ab".repeat(32) }, error: null }),
   };
   return { supabase: { from: vi.fn(() => chain) } };
 });
@@ -55,8 +55,9 @@ const endpoints = {
   recover: {
     reason: "invalid_recovery_key",
     send: () => request(app).post("/auth/recover").send({
-      email: "a@example.com", recovery_key_hash: "ab".repeat(32),
-      new_salt: "s", new_wrapped_mek: "m", new_auth_hash: "h",
+      // Well-formed but not signed by the account's key
+      email: "a@example.com", challenge: "cd".repeat(32), signature: "00".repeat(64),
+      new_salt: "c2FsdA==", new_wrapped_mek: "d3JhcHBlZA==", new_auth_hash: "ef".repeat(32),
     }),
   },
   "verify-password": {

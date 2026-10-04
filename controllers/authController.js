@@ -6,6 +6,8 @@ import { recordLoginAttempt } from "../models/loginAttemptModel.js";
 import { getMfaSettings } from "../models/mfaSettingsModel.js";
 import { getDeviceByClientId, getDeviceForSession, updateDeviceToken, revokeDeviceByToken, revokeOtherDevices, isDeviceTrusted, clearTrustedDevices } from "../models/deviceModel.js";
 import { getClientDeviceId, issueSession, setSessionCookies } from "../utils/session.js";
+import { buildRecoveryMessage, verifyRecoverySignature } from "../utils/recoverySignature.js";
+import { newChallenge, storeChallenge, consumeChallenge, CHALLENGE_TTL_SECONDS } from "../models/recoveryChallengeModel.js";
 import { isRateLimited, sendRateLimited, recordFailedAttempt } from "../utils/attemptLimit.js";
 
 // Configure Argon2id with consistent security parameters
@@ -20,7 +22,7 @@ const argon2Options = {
 
 export const register = async (req, res) => {
   try {
-    const { email, salt, wrapped_mek, auth_hash, recovery_key_hash } = req.body;
+    const { email, salt, wrapped_mek, auth_hash, recovery_public_key } = req.body;
 
     const server_hash = await argon2.hash(auth_hash, argon2Options);
 
@@ -31,15 +33,13 @@ export const register = async (req, res) => {
       wrapped_mek,
     });
 
-    // The client sends a deterministic verifier derived from the recovery key
-    // (never the key itself). Store only an Argon2id hash of it, so a database
-    // leak doesn't hand out a value that could be replayed to /auth/recover.
-    const recoveryKeyHash = await argon2.hash(recovery_key_hash, argon2Options);
+    // The client derives an Ed25519 key pair from the recovery key and sends only the
+    // public half. The server can check a recovery signature but cannot make one.
     const { error: rkError } = await supabase
       .from("recovery_keys")
-      .insert({ user_id: user.id, key_hash: recoveryKeyHash });
+      .insert({ user_id: user.id, public_key: recovery_public_key });
     if (rkError) {
-      console.error("Failed to save recovery key hash:", rkError.message);
+      console.error("Failed to save recovery public key:", rkError.message);
     }
 
     return res.status(201).json({ message: "User registered successfully" });
@@ -255,13 +255,48 @@ export const verifyPassword = async (req, res) => {
   }
 };
 
+// How the app asks for a recovery challenge. Always answers the same way, so it
+// does not reveal which emails have an account or a recovery key.
+export const recoveryChallenge = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (await isRateLimited(req)) {
+      return sendRateLimited(res, "recovery");
+    }
+
+    const challenge = newChallenge();
+
+    let user = null;
+    try {
+      user = await getUserByEmail(email);
+    } catch { }
+
+    if (user) {
+      const { data: rkRow } = await supabase
+        .from("recovery_keys")
+        .select("public_key")
+        .eq("user_id", user.id)
+        .single();
+      // Accounts created before signature-based recovery have no public key: nothing to sign for
+      if (rkRow?.public_key) {
+        await storeChallenge(user.id, challenge);
+      }
+    }
+
+    return res.status(200).json({ challenge, expires_in: CHALLENGE_TTL_SECONDS });
+  } catch (err) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 export const recover = async (req, res) => {
   try {
-    // SECURITY FIX: Now receiving recovery_key_hash (Argon2id) instead of raw recovery_key
-    // The server should NEVER receive the raw MEK (recovery key)
-    const { email, recovery_key_hash, new_salt, new_wrapped_mek, new_auth_hash } = req.body;
+    // The app proves it holds the recovery key by signing a one-time challenge together
+    // with the new credentials (docs/RECOVERY_SIGNATURE_DESIGN.md). Nothing replayable is sent.
+    const { email, challenge, signature, new_salt, new_wrapped_mek, new_auth_hash } = req.body;
 
-    if (!email || !recovery_key_hash || !new_salt || !new_wrapped_mek || !new_auth_hash) {
+    if (!email || !challenge || !signature || !new_salt || !new_wrapped_mek || !new_auth_hash) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -276,26 +311,30 @@ export const recover = async (req, res) => {
 
     const { data: rkRow, error: rkErr } = await supabase
       .from("recovery_keys")
-      .select("key_hash")
+      .select("public_key")
       .eq("user_id", user.id)
       .single();
 
-    if (rkErr || !rkRow) {
+    if (rkErr || !rkRow?.public_key) {
       return res.status(404).json({ error: "No recovery key on file for this account" });
     }
 
-    // The client sends the same deterministic verifier it sent at registration;
-    // check it against the stored Argon2id hash. A stored value that isn't an
-    // Argon2 hash (accounts created under an older scheme) can't match.
-    let keyMatches = false;
-    try {
-      keyMatches = await argon2.verify(rkRow.key_hash, recovery_key_hash, argon2Options);
-    } catch {
-      keyMatches = false;
-    }
-    if (!keyMatches) {
+    const message = buildRecoveryMessage({
+      challenge,
+      newSalt: new_salt,
+      newWrappedMek: new_wrapped_mek,
+      newAuthHash: new_auth_hash,
+    });
+    if (!verifyRecoverySignature(rkRow.public_key, signature, message)) {
       await recordFailedAttempt(req, user.id, "invalid_recovery_key");
       return res.status(401).json({ error: "Invalid recovery key" });
+    }
+
+    // Valid signature: now spend the challenge. It must exist, be this user's and
+    // be unexpired; a replay finds it already gone.
+    if (!(await consumeChallenge(user.id, challenge))) {
+      await recordFailedAttempt(req, user.id, "invalid_recovery_key");
+      return res.status(401).json({ error: "Recovery challenge is invalid, expired or already used", code: "CHALLENGE_INVALID" });
     }
 
     const new_server_hash = await argon2.hash(new_auth_hash, argon2Options);
@@ -310,13 +349,6 @@ export const recover = async (req, res) => {
       .eq("id", user.id);
 
     if (updateError) throw updateError;
-
-    // Re-hash the verifier with a fresh salt. The recovery key itself is unchanged.
-    const rotatedHash = await argon2.hash(recovery_key_hash, argon2Options);
-    await supabase
-      .from("recovery_keys")
-      .update({ key_hash: rotatedHash })
-      .eq("user_id", user.id);
 
     await supabase
       .from("user_devices")

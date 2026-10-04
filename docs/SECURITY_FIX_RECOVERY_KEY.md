@@ -1,3 +1,5 @@
+> **Superseded:** recovery no longer sends any fixed value. See `RECOVERY_SIGNATURE_DESIGN.md`.
+
 # Security Fix: Recovery Key Hash Vulnerability
 
 ## Vulnerability Description
