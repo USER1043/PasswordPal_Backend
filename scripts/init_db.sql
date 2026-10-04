@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS public.mfa_settings (
     is_totp_enabled  BOOLEAN     NOT NULL DEFAULT FALSE,
     backup_codes_enc TEXT,                          -- Encrypted/hashed backup codes blob (JSON array)
     codes_used       INTEGER     NOT NULL DEFAULT 0,
+    last_used_step   BIGINT,                        -- Latest 30-second TOTP step already used to log in.
+                                                    -- A code from this step or earlier is refused (replay protection).
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

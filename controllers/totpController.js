@@ -1,7 +1,8 @@
 import jwt from "jsonwebtoken";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
-import { getMfaSettings, upsertMfaSettings, disableMfa } from "../models/mfaSettingsModel.js";
+import { getMfaSettings, upsertMfaSettings, disableMfa, consumeTotpStep } from "../models/mfaSettingsModel.js";
+import { verifyTotp } from "../utils/totp.js";
 import { encryptData, decryptData } from "../utils/encryption.js";
 import { generateBackupCodes, hashBackupCodes } from "../utils/mfa.js";
 import bcrypt from "bcryptjs";
@@ -68,14 +69,9 @@ export const verifySetup = async (req, res) => {
       return res.status(400).json({ error: "Code must be a 6-digit number" });
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: secret,
-      encoding: "base32",
-      token: String(code),
-      window: 4,
-    });
+    const match = verifyTotp({ secret, token: code });
 
-    if (!verified) {
+    if (!match) {
       return res.status(401).json({ error: "Invalid code. Please try again." });
     }
 
@@ -96,6 +92,8 @@ export const verifySetup = async (req, res) => {
         userId,
         totpSecretEnc: encryptedSecret,
         isTotpEnabled: true,
+        // The code used to set up counts as used, so it cannot also log in straight away
+        lastUsedStep: match.step,
       });
 
       const codes = generateBackupCodes(10, 10);
@@ -175,16 +173,21 @@ export const verifyLogin = async (req, res) => {
     try {
       const decryptedSecret = decryptData(settings.totp_secret_enc);
 
-      const verified = speakeasy.totp.verify({
-        secret: decryptedSecret,
-        encoding: "base32",
-        token: String(code),
-        window: 4,
-      });
+      const match = verifyTotp({ secret: decryptedSecret, token: code });
 
-      if (!verified) {
+      if (!match) {
         await recordFailedAttempt(req, userId, "invalid_totp_code");
         return res.status(401).json({ error: "Invalid code. Please try again." });
+      }
+
+      // A code works once: a second use of the same 30-second step (a code someone saw or
+      // intercepted) is refused, and counts as a failed attempt.
+      if (!(await consumeTotpStep(userId, match.step))) {
+        await recordFailedAttempt(req, userId, "invalid_totp_code");
+        return res.status(401).json({
+          error: "That code was already used. Wait for the next code and try again.",
+          code: "TOTP_CODE_REUSED",
+        });
       }
 
       const user = await getUserById(userId);

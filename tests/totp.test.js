@@ -12,6 +12,7 @@ vi.mock('../models/mfaSettingsModel.js', () => ({
     disableMfa: vi.fn(),
     upsertMfaSettings: vi.fn(),
     getMfaSettings: vi.fn(),
+    consumeTotpStep: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../models/userModel.js', () => ({

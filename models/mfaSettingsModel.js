@@ -37,10 +37,11 @@ export async function getMfaSettings(userId) {
  * @param {boolean} [params.isTotpEnabled] - Whether TOTP is enabled.
  * @param {string|null} [params.backupCodesEnc] - Encrypted backup codes blob.
  * @param {number} [params.codesUsed] - Count of consumed backup codes.
+ * @param {number|null} [params.lastUsedStep] - Latest 30-second TOTP step already used.
  * @returns {Promise<import('../validators/schemas.js').MfaSetting>}
  * @throws {Error} If the database operation fails.
  */
-export async function upsertMfaSettings({ userId, totpSecretEnc, isTotpEnabled, backupCodesEnc, codesUsed }) {
+export async function upsertMfaSettings({ userId, totpSecretEnc, isTotpEnabled, backupCodesEnc, codesUsed, lastUsedStep }) {
     const record = {
         user_id: userId,
         updated_at: new Date().toISOString(),
@@ -50,6 +51,7 @@ export async function upsertMfaSettings({ userId, totpSecretEnc, isTotpEnabled, 
     if (isTotpEnabled !== undefined) record.is_totp_enabled = isTotpEnabled;
     if (backupCodesEnc !== undefined) record.backup_codes_enc = backupCodesEnc;
     if (codesUsed !== undefined) record.codes_used = codesUsed;
+    if (lastUsedStep !== undefined) record.last_used_step = lastUsedStep;
 
     const { data, error } = await supabase
         .from("mfa_settings")
@@ -94,4 +96,29 @@ export async function incrementCodesUsed(userId) {
         userId,
         codesUsed: (current.codes_used || 0) + 1,
     });
+}
+
+/**
+ * Use up a TOTP step so the same code cannot log in twice. One conditional UPDATE that
+ * only succeeds if no code from this step or a later one has been used, so two
+ * simultaneous requests with the same code cannot both pass.
+ *
+ * @param {string} userId - UUID of the user.
+ * @param {number} step - The 30-second TOTP step the accepted code belongs to.
+ * @returns {Promise<boolean>} true if the step was free, false if it (or a later one) was already used.
+ * @throws {Error} If the database operation fails.
+ */
+export async function consumeTotpStep(userId, step) {
+    const { data, error } = await supabase
+        .from("mfa_settings")
+        .update({ last_used_step: step })
+        .eq("user_id", userId)
+        .or(`last_used_step.is.null,last_used_step.lt.${step}`)
+        .select("user_id");
+
+    if (error) {
+        throw new Error(`Error recording TOTP use: ${error.message}`);
+    }
+
+    return Array.isArray(data) && data.length === 1;
 }

@@ -8,6 +8,7 @@ vi.mock("../models/mfaSettingsModel.js", () => ({
   getMfaSettings: vi.fn(),
   upsertMfaSettings: vi.fn(),
   disableMfa: vi.fn(),
+  consumeTotpStep: vi.fn(),
 }));
 vi.mock("../models/userModel.js", () => ({ getUserById: vi.fn() }));
 vi.mock("../models/loginAttemptModel.js", () => ({

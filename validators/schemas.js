@@ -62,6 +62,7 @@ import Joi from 'joi';
  * @property {boolean} is_totp_enabled - Whether TOTP MFA is currently active.
  * @property {string|null} backup_codes_enc - Encrypted backup codes blob.
  * @property {number} codes_used - Count of backup codes consumed.
+ * @property {number|null} last_used_step - Latest 30-second TOTP step already used to log in (replay protection).
  * @property {string} updated_at - ISO 8601 last-update timestamp.
  */
 
@@ -210,6 +211,7 @@ export const mfaSettingSchema = Joi.object({
     is_totp_enabled: Joi.boolean().default(false),
     backup_codes_enc: Joi.string().allow(null).optional(),
     codes_used: Joi.number().integer().min(0).default(0),
+    last_used_step: Joi.number().integer().allow(null).optional(),
     updated_at: isoDate.optional(),
 });
 
