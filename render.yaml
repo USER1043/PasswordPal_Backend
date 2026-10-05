@@ -36,13 +36,15 @@ services:
       - key: TRUST_PROXY_HOPS
         value: "1"
 
+      # Optional, not secret - add it above if the app is served from another origin:
+      # FRONTEND_URL          -> extra allowed CORS origin (the Tauri origins are always allowed)
+
       # These are secret - set them in the Render dashboard, NOT here:
-      # DATABASE_URL          → postgresql://...
-      # JWT_SECRET            → (random 64-char hex)
-      # JWT_REFRESH_SECRET    → (random 64-char hex)
-      # ENCRYPTION_KEY       → (random 64-char hex: openssl rand -hex 32; required, the server
+      # SUPABASE_URL          -> https://<project>.supabase.co
+      # SUPABASE_SECRET_KEY   -> Supabase secret (service_role) key, not the publishable/anon key
+      # JWT_SECRET            -> (random 64-char hex: openssl rand -hex 32)
+      # ENCRYPTION_KEY        -> (random 64-char hex: openssl rand -hex 32; required, the server
       #                          will not start in production without it)
-      # SESSION_SECRET        → (random 64-char hex)
-      # SUPABASE_URL          → https://<project>.supabase.co
-      # SUPABASE_KEY          → <service-role key>
-      # DOTENV_PRIVATE_KEY    → (if using @dotenvx encrypted .env)
+      # DOTENV_PRIVATE_KEY    -> (only if using an @dotenvx encrypted .env)
+      #
+      # The authoritative list is .env.example (and the Configuration table in README.md).
