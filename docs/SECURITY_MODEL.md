@@ -39,7 +39,7 @@ Bold arrows leave the device. Everything else stays in the app.
 - **Device binding.** Each session carries a device id (`did`) and each request is checked against the device row. A revoked or blocked device gets `401 SESSION_REVOKED` on its next request. Blocked devices are also refused at login before the password is checked.
 - **Refresh tokens.** Stored only as SHA-256 hashes. A refresh checks the device row again and keeps the original `auth_time`.
 - **Fresh authentication.** Export and account deletion need a password check within the last 5 minutes (`requireFreshAuth`, `403 REAUTH_REQUIRED`).
-- **Password change.** Requires the current password, rotates `salt`, `wrapped_mek` and `server_hash`, signs out all other devices and clears every trusted device.
+- **Password change.** Requires the current password, replaces `salt`, `wrapped_mek` and `server_hash` with the values the app sends (the app re-wraps the same vault key, so vault data is not re-encrypted), signs out all other devices and clears every trusted device.
 
 ## Brute-force protection
 
