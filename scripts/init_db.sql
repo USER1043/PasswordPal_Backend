@@ -161,10 +161,7 @@ CREATE TABLE IF NOT EXISTS public.recovery_keys (
                                                     -- device from the recovery key. Recovery needs a signature
                                                     -- that verifies against it. NULL for accounts created before
                                                     -- signature-based recovery (they cannot recover).
-    key_hash    TEXT,                               -- Legacy: hash of the old replayable fingerprint. No longer
-                                                    -- read or written; kept so old rows are not lost.
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
-    expires_at  TIMESTAMPTZ                         -- Nullable - set if recovery keys have a TTL policy
+    created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- One-time challenges the app must sign to recover an account (5 minute TTL).

@@ -141,7 +141,7 @@ describe("recovery by signature", () => {
     });
 
     it("stores nothing for an account that has no recovery public key", async () => {
-      db.recovery_keys = { public_key: null, key_hash: "legacy" };
+      db.recovery_keys = { public_key: null };
       const res = await request(app).post("/auth/recover/challenge").send({ email: "a@example.com" });
       expect(res.status).toBe(200);
       expect(db.recovery_challenges.size).toBe(0);
@@ -243,7 +243,7 @@ describe("recovery by signature", () => {
     });
 
     it("refuses an account enrolled under the old scheme (no public key)", async () => {
-      db.recovery_keys = { public_key: null, key_hash: "legacy" };
+      db.recovery_keys = { public_key: null };
       const challenge = "ab".repeat(32);
       const res = await request(app).post("/auth/recover")
         .send(body(challenge, sign(keys.privateKey, { challenge, ...NEW })));

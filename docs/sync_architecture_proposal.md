@@ -1,3 +1,5 @@
+> **Status: partly adopted.** `client_record_id` has been removed from the schema (`scripts/init_db.sql`) and conflicts are handled with a per-record `version` and `is_deleted` tombstones. Clients may still supply a record UUID on create. Kept as a record of the reasoning; current behaviour is in [ARCHITECTURE.md](ARCHITECTURE.md#vault-storage-and-sync).
+
 # Simplified Sync Architecture Proposal
 
 ## Current Problem
