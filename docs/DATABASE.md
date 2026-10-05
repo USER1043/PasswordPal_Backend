@@ -15,8 +15,8 @@ erDiagram
     users ||--o{ device_events : "history of"
     user_devices ||--o{ refresh_tokens : "holds"
     user_devices ||--o{ device_events : "target / actor"
-    users ||--o{ sync_queue : ""
-    users ||--o{ conflicts : ""
+    users ||--o{ sync_queue : "queues"
+    users ||--o{ conflicts : "has"
 ```
 
 ## Tables
